@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -15,6 +16,7 @@ use serde_json::json;
 use crate::app::{collect_tool_results, collect_tool_uses, final_assistant_text, LiveCli};
 use crate::args::CliOutputFormat;
 use crate::format::{default_permission_mode, parse_permission_mode_arg};
+use crate::manifest_adapter::ManifestAdapter;
 use crate::task_events::TaskEventSink;
 use crate::task_evidence;
 use crate::task_sandbox;
@@ -41,6 +43,12 @@ pub(crate) enum RunTaskError {
     ContractValidation(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EventFormat {
+    Native,
+    Substrate,
+}
+
 impl std::fmt::Display for RunTaskError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -54,25 +62,45 @@ impl std::fmt::Display for RunTaskError {
 impl std::error::Error for RunTaskError {}
 
 pub(crate) fn run_task(
-    input: PathOrStdin,
+    input: Option<PathOrStdin>,
+    manifest: Option<PathBuf>,
+    workdir: Option<PathBuf>,
     output_format: CliOutputFormat,
     event_log: Option<PathBuf>,
+    event_format: EventFormat,
+    dry_run: bool,
 ) -> Result<(), RunTaskError> {
     if output_format != CliOutputFormat::Json {
         return Err(RunTaskError::Process(
             "run-task only supports --output-format json".to_string(),
         ));
     }
+    if input.is_some() && manifest.is_some() {
+        return Err(RunTaskError::Process(
+            "cannot use --manifest and --input together".to_string(),
+        ));
+    }
 
-    let raw = read_input(input)?;
-    let request: HarnessTaskRequest = serde_json::from_str(&raw)
-        .map_err(|error| RunTaskError::Process(format!("invalid task JSON: {error}")))?;
+    let request = if let Some(path) = manifest {
+        read_manifest_request(&path, workdir)?
+    } else {
+        let input = input.ok_or_else(|| {
+            RunTaskError::Process("run-task requires --input <path|->".to_string())
+        })?;
+        let raw = read_input(input)?;
+        serde_json::from_str(&raw)
+            .map_err(|error| RunTaskError::Process(format!("invalid task JSON: {error}")))?
+    };
     if let Err(error) = request.validate() {
         return Err(RunTaskError::ContractValidation(error.to_string()));
     }
+    if dry_run {
+        write_json_line(&request)?;
+        return Ok(());
+    }
 
     let mut events = match event_log {
-        Some(path) => TaskEventSink::file(path)
+        Some(path) => TaskEventSink::file(path, event_format, &request)
             .map_err(|error| RunTaskError::Process(format!("failed to open event log: {error}")))?,
         None => TaskEventSink::disabled(),
     };
@@ -103,13 +131,37 @@ pub(crate) fn run_task(
     result
         .validate()
         .map_err(|error| RunTaskError::Process(format!("invalid generated result: {error}")))?;
+    write_json_line(&result)?;
+    Ok(())
+}
+
+fn read_manifest_request(
+    path: &Path,
+    workdir: Option<PathBuf>,
+) -> Result<HarnessTaskRequest, RunTaskError> {
+    let raw = fs::read_to_string(path).map_err(|error| {
+        RunTaskError::Process(format!(
+            "failed to read manifest {}: {error}",
+            path.display()
+        ))
+    })?;
+    let manifest = serde_yaml::from_str(&raw)
+        .map_err(|error| RunTaskError::Process(format!("invalid manifest YAML: {error}")))?;
+    let workdir = workdir.map_or_else(
+        || env::current_dir().map_or_else(|_| ".".to_string(), |path| path.display().to_string()),
+        |path| path.display().to_string(),
+    );
+    ManifestAdapter::to_harness_request(&manifest, &workdir)
+        .map_err(|error| RunTaskError::ContractValidation(error.to_string()))
+}
+
+fn write_json_line<T: serde::Serialize>(value: &T) -> Result<(), RunTaskError> {
     let stdout = io::stdout();
     let mut lock = stdout.lock();
-    serde_json::to_writer(&mut lock, &result)
+    serde_json::to_writer(&mut lock, value)
         .map_err(|error| RunTaskError::Process(error.to_string()))?;
     lock.write_all(b"\n")
-        .map_err(|error| RunTaskError::Process(error.to_string()))?;
-    Ok(())
+        .map_err(|error| RunTaskError::Process(error.to_string()))
 }
 
 fn emit_result_events(
@@ -248,6 +300,7 @@ fn execute_task(request: &HarnessTaskRequest) -> Result<HarnessTaskResult, RunTa
         .model
         .clone()
         .unwrap_or_else(|| crate::DEFAULT_MODEL.to_string());
+    let _provenance_env = TaskProvenanceEnv::set(request);
     let mut cli = LiveCli::new(model.clone(), true, allowed_tools, permission_mode, None)
         .map_err(|error| RunTaskError::Process(error.to_string()))?;
     let summary = cli
@@ -301,6 +354,57 @@ impl Drop for CwdGuard {
     fn drop(&mut self) {
         let _ = env::set_current_dir(&self.original);
     }
+}
+
+struct TaskProvenanceEnv {
+    _guards: Vec<EnvVarGuard>,
+}
+
+impl TaskProvenanceEnv {
+    fn set(request: &HarnessTaskRequest) -> Self {
+        let agent_id = substrate_agent_id(request).map_or_else(
+            || substrate_types::AgentId::new().to_string(),
+            ToString::to_string,
+        );
+        Self {
+            _guards: vec![
+                EnvVarGuard::set("NINMU_CODE_AGENT_ID", agent_id),
+                EnvVarGuard::set("NINMU_CODE_MISSION_ID", request.mission_id.clone()),
+                EnvVarGuard::set("NINMU_CODE_TASK_ID", request.task_id.clone()),
+            ],
+        }
+    }
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: String) -> Self {
+        let previous = env::var_os(key);
+        env::set_var(key, value);
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => env::set_var(self.key, value),
+            None => env::remove_var(self.key),
+        }
+    }
+}
+
+fn substrate_agent_id(request: &HarnessTaskRequest) -> Option<&str> {
+    request
+        .project_profile
+        .as_ref()?
+        .get("substrate")?
+        .get("agent_id")?
+        .as_str()
 }
 
 fn task_prompt(request: &HarnessTaskRequest) -> String {

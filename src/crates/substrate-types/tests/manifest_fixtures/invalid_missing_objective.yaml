@@ -1,0 +1,61 @@
+apiVersion: substrate.deepthinking.dev/v1alpha1
+kind: FactoryCell
+metadata:
+  mission_id: "019722a0-0000-7000-8000-000000000001"
+  task_id: "019722a0-0000-7000-8000-000000000002"
+  project_id: "019722a0-0000-7000-8000-000000000003"
+  tenant_id: "019722a0-0000-7000-8000-000000000004"
+  cell_id: "019722a0-0000-7000-8000-000000000005"
+spec:
+  objective: ""
+  repository:
+    provider: kizuna
+    instance: "forge.substrate.dev"
+    org: "acme"
+    repo: "backend"
+    base_ref: "main"
+    working_ref: "factory/empty-objective"
+    agent_identity:
+      trust_level: 2
+      scopes:
+        - Read
+        - Write
+  runtime:
+    isolation: docker
+    image: "substrate/cell-rust-node:2026-05-27"
+    cpu: 2
+    memory_mb: 4096
+    timeout_ms: 900000
+    network_policy:
+      type: restricted
+  agent:
+    harness: ninmu-code
+    model_policy:
+      type: cost_aware
+    max_steps: 16
+    max_prompt_tokens_per_call: 8192
+    max_total_tokens: 50000
+  memory:
+    peer_id: "kizuna-primary"
+    protocol: oamp
+    required_capabilities:
+      governance: true
+      provenance: true
+    grant:
+      sensitivity_ceiling: internal
+      labels:
+        - "project/*"
+  tools:
+    allowed:
+      - shell.readonly
+    approval_required: []
+  verification:
+    required_commands:
+      - "cargo test"
+    artifact_checks:
+      max_patch_files: 10
+      require_tests_for_code_changes: true
+  output:
+    mode: draft_pr
+    include_report: true
+    include_replay_ref: false
