@@ -168,7 +168,7 @@ How to use it:
 
 Some palette entries run immediately, such as stats or help. Others insert a slash command into the input so you can finish the argument yourself, such as `/export ` or `/permissions `.
 
-Tab completion is intentionally curated. It includes slash command names, aliases, common subcommands, common argument values, the active model, and recent session ids; it does not scan every possible filepath, external provider state, or remote tool registry.
+Tab completion is intentionally curated. It includes slash command names, aliases, common subcommands, common argument values, and the active model; it does not scan every possible filepath, external provider state, or remote tool registry.
 
 ---
 

@@ -30,6 +30,68 @@ use ninmu_runtime::{
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use substrate_types::SensitivityClass;
+
+#[derive(Debug, Clone)]
+pub struct RecallMemoryTool {
+    client: ninmu_runtime::oamp_client::OampClient,
+}
+
+impl RecallMemoryTool {
+    #[must_use]
+    pub fn new(client: ninmu_runtime::oamp_client::OampClient) -> Self {
+        Self { client }
+    }
+
+    pub async fn execute(&self, input: Value) -> Result<String, String> {
+        let query = input
+            .get("query")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "query is required".to_string())?;
+        let entries = self
+            .client
+            .recall(query)
+            .await
+            .map_err(|error| error.to_string())?;
+        serde_json::to_string_pretty(&ninmu_runtime::oamp_client::memory_entry_json(&entries))
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StoreMemoryTool {
+    client: ninmu_runtime::oamp_client::OampClient,
+    provenance: ninmu_runtime::oamp_client::Provenance,
+}
+
+impl StoreMemoryTool {
+    #[must_use]
+    pub fn new(
+        client: ninmu_runtime::oamp_client::OampClient,
+        provenance: ninmu_runtime::oamp_client::Provenance,
+    ) -> Self {
+        Self { client, provenance }
+    }
+
+    pub async fn execute(&self, input: Value) -> Result<String, String> {
+        let content = input
+            .get("content")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "content is required".to_string())?;
+        let sensitivity = input
+            .get("sensitivity")
+            .and_then(Value::as_str)
+            .map(ninmu_runtime::oamp_client::parse_sensitivity)
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or(SensitivityClass::Internal);
+        self.client
+            .write(content, &self.provenance, sensitivity)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(json!({"status": "stored"}).to_string())
+    }
+}
 
 /// Global task registry shared across tool invocations within a session.
 fn global_lsp_registry() -> &'static LspRegistry {
@@ -435,6 +497,33 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     "content": { "type": "string" }
                 },
                 "required": ["path", "content"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::WorkspaceWrite,
+        },
+        ToolSpec {
+            name: "recall_memory",
+            description: "Recall governed project memory via OAMP.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "store_memory",
+            description: "Store a governed memory entry via OAMP.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "content": { "type": "string" },
+                    "sensitivity": { "type": "string", "enum": ["public", "internal"] }
+                },
+                "required": ["content"],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::WorkspaceWrite,
@@ -1216,6 +1305,7 @@ fn execute_tool_with_enforcer(
             maybe_enforce_permission_check(enforcer, name, input)?;
             from_value::<WriteFileInput>(input).and_then(run_write_file)
         }
+        "recall_memory" | "store_memory" => execute_memory_tool(enforcer, name, input),
         "edit_file" => {
             maybe_enforce_permission_check(enforcer, name, input)?;
             from_value::<EditFileInput>(input).and_then(run_edit_file)
@@ -1293,6 +1383,71 @@ fn execute_tool_with_enforcer(
         }
         _ => Err(format!("unsupported tool: {name}")),
     }
+}
+
+fn execute_memory_tool(
+    enforcer: Option<&PermissionEnforcer>,
+    name: &str,
+    input: &Value,
+) -> Result<String, String> {
+    maybe_enforce_permission_check(enforcer, name, input)?;
+    match name {
+        "recall_memory" => {
+            let tool = RecallMemoryTool::new(oamp_client_from_env()?);
+            block_on_memory_tool(tool.execute(input.clone()))
+        }
+        "store_memory" => {
+            let tool = StoreMemoryTool::new(oamp_client_from_env()?, provenance_from_env()?);
+            block_on_memory_tool(tool.execute(input.clone()))
+        }
+        _ => Err(format!("unknown memory tool: {name}")),
+    }
+}
+
+fn block_on_memory_tool(
+    future: impl std::future::Future<Output = Result<String, String>>,
+) -> Result<String, String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?
+        .block_on(future)
+}
+
+fn oamp_client_from_env() -> Result<ninmu_runtime::oamp_client::OampClient, String> {
+    let endpoint = std::env::var("OAMP_ENDPOINT")
+        .map_err(|_| "OAMP_ENDPOINT is required for memory tools".to_string())?;
+    Ok(ninmu_runtime::oamp_client::OampClient::new(
+        &endpoint,
+        substrate_types::MemoryGrant {
+            sensitivity_ceiling: SensitivityClass::Internal,
+            labels: Vec::new(),
+        },
+    ))
+}
+
+fn provenance_from_env() -> Result<ninmu_runtime::oamp_client::Provenance, String> {
+    let agent_id =
+        parse_prefixed_uuid_env("NINMU_CODE_AGENT_ID").map(substrate_types::AgentId::from_uuid)?;
+    let mission_id = parse_prefixed_uuid_env("NINMU_CODE_MISSION_ID")
+        .map(substrate_types::MissionId::from_uuid)?;
+    let task_id =
+        parse_prefixed_uuid_env("NINMU_CODE_TASK_ID").map(substrate_types::TaskId::from_uuid)?;
+    Ok(ninmu_runtime::oamp_client::Provenance {
+        agent_id,
+        mission_id,
+        task_id,
+    })
+}
+
+fn parse_prefixed_uuid_env(key: &str) -> Result<uuid::Uuid, String> {
+    let raw = std::env::var(key).map_err(|_| format!("{key} is required for memory tools"))?;
+    parse_prefixed_uuid(&raw).map_err(|error| format!("{key} is invalid: {error}"))
+}
+
+fn parse_prefixed_uuid(value: &str) -> Result<uuid::Uuid, uuid::Error> {
+    let uuid = value.rsplit_once('_').map_or(value, |(_, suffix)| suffix);
+    uuid::Uuid::parse_str(uuid)
 }
 
 fn maybe_enforce_permission_check(
@@ -6137,9 +6292,9 @@ mod tests {
         agent_permission_policy, allowed_tools_for_subagent, classify_lane_failure,
         derive_agent_state, execute_agent_with_spawn, execute_tool, extract_recovery_outcome,
         final_assistant_text, global_cron_registry, maybe_commit_provenance, mvp_tool_specs,
-        permission_mode_from_plugin, persist_agent_terminal_state, push_output_block,
-        run_task_packet, AgentInput, AgentJob, GlobalToolRegistry, LaneEventName, LaneFailureClass,
-        ProviderRuntimeClient, SubagentToolExecutor,
+        permission_mode_from_plugin, persist_agent_terminal_state, provenance_from_env,
+        push_output_block, run_task_packet, AgentInput, AgentJob, GlobalToolRegistry,
+        LaneEventName, LaneFailureClass, ProviderRuntimeClient, SubagentToolExecutor,
     };
     use ninmu_api::OutputContentBlock;
     use ninmu_runtime::ProviderFallbackConfig;
@@ -6152,6 +6307,70 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn store_memory_schema_matches_internal_sensitivity_ceiling() {
+        let store_memory = mvp_tool_specs()
+            .into_iter()
+            .find(|spec| spec.name == "store_memory")
+            .expect("store_memory should be advertised");
+
+        assert_eq!(
+            store_memory.input_schema["properties"]["sensitivity"]["enum"],
+            json!(["public", "internal"])
+        );
+    }
+
+    #[test]
+    fn provenance_from_env_uses_stable_task_ids() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous_agent = std::env::var_os("NINMU_CODE_AGENT_ID");
+        let previous_mission = std::env::var_os("NINMU_CODE_MISSION_ID");
+        let previous_task = std::env::var_os("NINMU_CODE_TASK_ID");
+
+        std::env::set_var(
+            "NINMU_CODE_AGENT_ID",
+            "agt_01928f9b-0f40-7000-8000-000000000001",
+        );
+        std::env::set_var(
+            "NINMU_CODE_MISSION_ID",
+            "mis_01928f9b-0f40-7000-8000-000000000002",
+        );
+        std::env::set_var(
+            "NINMU_CODE_TASK_ID",
+            "tsk_01928f9b-0f40-7000-8000-000000000003",
+        );
+
+        let provenance = provenance_from_env().expect("env ids should parse");
+
+        assert_eq!(
+            provenance.agent_id.to_string(),
+            "agt_01928f9b-0f40-7000-8000-000000000001"
+        );
+        assert_eq!(
+            provenance.mission_id.to_string(),
+            "mis_01928f9b-0f40-7000-8000-000000000002"
+        );
+        assert_eq!(
+            provenance.task_id.to_string(),
+            "tsk_01928f9b-0f40-7000-8000-000000000003"
+        );
+
+        match previous_agent {
+            Some(value) => std::env::set_var("NINMU_CODE_AGENT_ID", value),
+            None => std::env::remove_var("NINMU_CODE_AGENT_ID"),
+        }
+        match previous_mission {
+            Some(value) => std::env::set_var("NINMU_CODE_MISSION_ID", value),
+            None => std::env::remove_var("NINMU_CODE_MISSION_ID"),
+        }
+        match previous_task {
+            Some(value) => std::env::set_var("NINMU_CODE_TASK_ID", value),
+            None => std::env::remove_var("NINMU_CODE_TASK_ID"),
+        }
     }
 
     fn env_guard() -> std::sync::MutexGuard<'static, ()> {

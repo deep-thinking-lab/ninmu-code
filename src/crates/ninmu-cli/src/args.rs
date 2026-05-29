@@ -130,9 +130,13 @@ pub(crate) enum CliAction {
         output_format: CliOutputFormat,
     },
     RunTask {
-        input: crate::run_task::PathOrStdin,
+        input: Option<crate::run_task::PathOrStdin>,
+        manifest: Option<PathBuf>,
+        workdir: Option<PathBuf>,
         output_format: CliOutputFormat,
         event_log: Option<PathBuf>,
+        event_format: crate::run_task::EventFormat,
+        dry_run: bool,
     },
     Worker {
         action: crate::worker_mode::WorkerAction,
@@ -753,7 +757,12 @@ pub(crate) fn parse_run_task_args(
     output_format: CliOutputFormat,
 ) -> Result<CliAction, String> {
     let mut input = None;
+    let mut manifest = None;
+    let mut workdir = None;
     let mut event_log = None;
+    let mut event_format = crate::run_task::EventFormat::Native;
+    let mut event_format_explicit = false;
+    let mut dry_run = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -779,14 +788,77 @@ pub(crate) fn parse_run_task_args(
                 event_log = Some(PathBuf::from(&flag[12..]));
                 index += 1;
             }
+            "--manifest" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --manifest".to_string())?;
+                manifest = Some(PathBuf::from(value));
+                index += 2;
+            }
+            flag if flag.starts_with("--manifest=") => {
+                manifest = Some(PathBuf::from(&flag[11..]));
+                index += 1;
+            }
+            "--workdir" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --workdir".to_string())?;
+                workdir = Some(PathBuf::from(value));
+                index += 2;
+            }
+            flag if flag.starts_with("--workdir=") => {
+                workdir = Some(PathBuf::from(&flag[10..]));
+                index += 1;
+            }
+            "--event-format" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --event-format".to_string())?;
+                event_format = parse_event_format(value)?;
+                event_format_explicit = true;
+                index += 2;
+            }
+            flag if flag.starts_with("--event-format=") => {
+                event_format = parse_event_format(&flag[15..])?;
+                event_format_explicit = true;
+                index += 1;
+            }
+            "--dry-run" => {
+                dry_run = true;
+                index += 1;
+            }
             other => return Err(format!("unknown run-task option: {other}")),
         }
     }
+    if input.is_some() && manifest.is_some() {
+        return Err("cannot use --manifest and --input together".to_string());
+    }
+    if workdir.is_some() && manifest.is_none() {
+        return Err("--workdir requires --manifest".to_string());
+    }
+    if input.is_none() && manifest.is_none() {
+        return Err("run-task requires --input <path|-> or --manifest <path>".to_string());
+    }
+    if manifest.is_some() && !event_format_explicit {
+        event_format = crate::run_task::EventFormat::Substrate;
+    }
     Ok(CliAction::RunTask {
-        input: input.ok_or_else(|| "run-task requires --input <path|->".to_string())?,
+        input,
+        manifest,
+        workdir,
         output_format,
         event_log,
+        event_format,
+        dry_run,
     })
+}
+
+fn parse_event_format(value: &str) -> Result<crate::run_task::EventFormat, String> {
+    match value {
+        "native" => Ok(crate::run_task::EventFormat::Native),
+        "substrate" => Ok(crate::run_task::EventFormat::Substrate),
+        other => Err(format!("unsupported event format: {other}")),
+    }
 }
 
 pub(crate) fn parse_local_help_action(rest: &[String]) -> Option<Result<CliAction, String>> {
