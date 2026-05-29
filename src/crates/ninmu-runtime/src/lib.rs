@@ -8,6 +8,7 @@ mod bash;
 pub mod bash_validation;
 mod bootstrap;
 pub mod branch_lock;
+mod cache_stable;
 mod compact;
 mod config;
 pub mod config_validate;
@@ -56,6 +57,9 @@ pub mod worker_boot;
 pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
 pub use branch_lock::{detect_branch_lock_collisions, BranchLockCollision, BranchLockIntent};
+pub use cache_stable::{
+    compact_cache_stable, CacheStableCompactionConfig, CacheStableResult, CacheStableState,
+};
 pub use compact::{
     compact_session, estimate_session_tokens, format_compact_summary,
     get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,
@@ -74,7 +78,8 @@ pub use config_validate::{
     DiagnosticKind, ValidationResult,
 };
 pub use conversation::{
-    auto_compaction_threshold_from_env, ApiClient, ApiRequest, AssistantEvent, AutoCompactionEvent,
+    auto_compaction_threshold_from_env, detect_needs_pro, escalate_model_name,
+    summary_flash_model_hint, ApiClient, ApiRequest, AssistantEvent, AutoCompactionEvent,
     ConversationRuntime, PromptCacheEvent, RuntimeError, StaticToolExecutor, ToolError,
     ToolExecutor, TurnSummary,
 };

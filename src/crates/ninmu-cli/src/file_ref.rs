@@ -6,7 +6,7 @@
 
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// A parsed `@` reference found in user input.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,12 +96,31 @@ fn expand_file_refs_from(input: &str, cwd: &Path) -> ExpandedInput {
     let mut resolved = Vec::new();
     let mut failed = Vec::new();
     let mut result = input.to_string();
+    let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
 
     // Process in reverse order so byte offsets remain valid
     for file_ref in refs.into_iter().rev() {
-        let file_path = cwd.join(&file_ref.path);
+        if let Err(err) = validate_file_ref_path(&file_ref.path) {
+            failed.push((file_ref.path.clone(), err.to_string()));
+            continue;
+        }
 
-        match fs::read_to_string(&file_path) {
+        let file_path = cwd.join(&file_ref.path);
+        let read_path = match file_path.canonicalize() {
+            Ok(canonical) => {
+                if !canonical.starts_with(&canonical_cwd) {
+                    failed.push((
+                        file_ref.path.clone(),
+                        "file reference escapes the workspace".to_string(),
+                    ));
+                    continue;
+                }
+                canonical
+            }
+            Err(_) => file_path,
+        };
+
+        match fs::read_to_string(&read_path) {
             Ok(contents) => {
                 let display_path = file_ref.path.clone();
                 let replacement = format!("<file path=\"{display_path}\">\n{contents}\n</file>");
@@ -165,6 +184,20 @@ fn complete_file_ref_from(partial: &str, cwd: &Path) -> Vec<String> {
         // No directory separator — match files in CWD by filename prefix
         list_dir_entries_matching(cwd, "", partial, limit)
     }
+}
+
+fn validate_file_ref_path(path: &str) -> Result<(), &'static str> {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        return Err("absolute file references are not allowed");
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err("parent directory file references are not allowed");
+    }
+    Ok(())
 }
 
 fn list_dir_entries(dir: &Path, prefix: &str, limit: usize) -> Vec<String> {
@@ -342,6 +375,67 @@ mod tests {
         assert!(result.failed.is_empty());
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn expand_absolute_ref_is_rejected_without_reading() {
+        let dir = temp_dir("absolute");
+        let _ = fs::create_dir_all(&dir);
+        let secret_path = dir.join("secret.txt");
+        fs::write(&secret_path, "do not leak").expect("write secret");
+
+        let input = format!("read @{}", secret_path.display());
+        let result = expand_file_refs_from(&input, &dir);
+
+        assert!(result.resolved.is_empty());
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(result.failed[0].0, secret_path.display().to_string());
+        assert!(result.expanded.contains(&input));
+        assert!(!result.expanded.contains("do not leak"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn expand_parent_ref_is_rejected_without_reading() {
+        let root = temp_dir("parent");
+        let workspace = root.join("workspace");
+        let _ = fs::create_dir_all(&workspace);
+        fs::write(root.join("secret.txt"), "parent secret").expect("write secret");
+
+        let result = expand_file_refs_from("read @../secret.txt", &workspace);
+
+        assert!(result.resolved.is_empty());
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(result.failed[0].0, "../secret.txt");
+        assert!(result.expanded.contains("@../secret.txt"));
+        assert!(!result.expanded.contains("parent secret"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn expand_symlink_escape_is_rejected_without_reading() {
+        let root = temp_dir("symlink");
+        let workspace = root.join("workspace");
+        let outside = root.join("outside");
+        let _ = fs::create_dir_all(&workspace);
+        let _ = fs::create_dir_all(&outside);
+        let secret_path = outside.join("secret.txt");
+        fs::write(&secret_path, "linked secret").expect("write secret");
+        std::os::unix::fs::symlink(&secret_path, workspace.join("linked.txt"))
+            .expect("create symlink");
+
+        let result = expand_file_refs_from("read @linked.txt", &workspace);
+
+        assert!(result.resolved.is_empty());
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(result.failed[0].0, "linked.txt");
+        assert!(result.expanded.contains("@linked.txt"));
+        assert!(!result.expanded.contains("linked secret"));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

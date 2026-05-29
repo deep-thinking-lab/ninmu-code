@@ -150,6 +150,7 @@ impl SystemPromptBuilder {
         sections.push(get_simple_system_section());
         sections.push(get_simple_doing_tasks_section());
         sections.push(get_actions_section());
+        sections.push(get_deepseek_corrections_section());
         sections.push(SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_string());
         sections.push(self.environment_section());
         if let Some(project_context) = &self.project_context {
@@ -552,6 +553,35 @@ fn get_simple_doing_tasks_section() -> String {
         .join("\n")
 }
 
+/// DeepSeek-specific behavioral corrections.
+///
+/// These rules address known `DeepSeek` failure modes in coding-agent
+/// scenarios. They are always included because they improve output
+/// quality regardless of the backend model.
+fn get_deepseek_corrections_section() -> String {
+    let items = prepend_bullets(vec![
+        // Cite or shut up — DeepSeek hallucinates confident negative claims
+        "Every factual claim about this codebase needs evidence. Positive claims (file/function/feature exists) must cite a source. Negative claims (\"X is missing\", \"Y isn't implemented\") are the #1 hallucination shape — use search_content or glob to verify BEFORE asserting absence. If the search returns nothing, state the absence with the query as evidence.".to_string(),
+        // No fabricated percentages — DeepSeek invents quantified claims
+        "Do not fabricate percentages or metrics. \"Saves 40-60% tokens\" is invented unless you computed it. Ground claims in cited data or use hedged language.".to_string(),
+        // Flag → consumer trace — don't infer from type annotations
+        "Reading a type annotation or config flag is not understanding behavior. Search for the CONSUMER of the flag and read the branch that acts on it before making claims about behavior.".to_string(),
+        // Auto-preview limitations
+        "Auto-preview returns head + tail with the middle elided. Do not conclude what's in the elided section from a preview alone — call read_file with an explicit range to verify.".to_string(),
+        // Task integrity
+        "Do not unilaterally simplify, narrow, or change the objective to save tokens, time, or steps. If you believe the objective needs adjustment, ask the user — do not decide on your own.".to_string(),
+        // Schema cost
+        "Every tool's description ships in every request. When proposing new tools, consider whether existing tool composition or a prompt/description change can achieve the same end. Default to 'tighten prompt / existing tool'.".to_string(),
+        // Formatting for terminal display
+        "Format responses for a terminal (TUI) with a real markdown renderer: use GitHub-Flavored Markdown tables (| col | col |) with ASCII pipes. Never use Unicode box-drawing characters (│ ─ ┼ ┌ ┐ └ ┘ ├ ┤). Keep table cells short. For flow charts use plain bullet lists with → or ↓ between steps.".to_string(),
+    ]);
+
+    std::iter::once("# Behavioral guidelines".to_string())
+        .chain(items)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn get_actions_section() -> String {
     [
         "# Executing actions with care".to_string(),
@@ -679,6 +709,42 @@ mod tests {
         assert_eq!(
             display_context_path(Path::new("/tmp/project/.ninmu/CLAUDE.md")),
             "CLAUDE.md"
+        );
+    }
+
+    #[test]
+    fn deepseek_corrections_section_included_in_prompt() {
+        let prompt = SystemPromptBuilder::new()
+            .with_os("linux", "6.8")
+            .with_project_context(ProjectContext {
+                cwd: PathBuf::from("/tmp"),
+                current_date: "2026-06-01".to_string(),
+                ..ProjectContext::default()
+            })
+            .render();
+        assert!(
+            prompt.contains("Behavioral guidelines"),
+            "should contain section header"
+        );
+        assert!(
+            prompt.contains("Every factual claim about this codebase"),
+            "should contain evidence rule"
+        );
+        assert!(
+            prompt.contains("Do not fabricate percentages"),
+            "should contain no fabricated metrics"
+        );
+        assert!(
+            prompt.contains("Reading a type annotation"),
+            "should contain flag → consumer trace"
+        );
+        assert!(
+            prompt.contains("Do not unilaterally simplify"),
+            "should contain task integrity"
+        );
+        assert!(
+            prompt.contains("Every tool's description ships"),
+            "should contain schema cost"
         );
     }
 

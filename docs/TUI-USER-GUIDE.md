@@ -111,7 +111,7 @@ On narrow terminals, the same information is condensed into the main layout and 
 
 ### Input Dock
 
-The input dock is where you write prompts and slash commands. It supports cursor movement, prompt history, multi-line prompts, and slash completion for command names plus common curated arguments such as permission modes, config actions, model aliases, and recent session ids.
+The input dock is where you write prompts and slash commands. It supports cursor movement, prompt history, multi-line prompts, and slash completion for command names plus common curated arguments such as permission modes, config actions, and model aliases.
 
 ---
 
@@ -168,7 +168,7 @@ How to use it:
 
 Some palette entries run immediately, such as stats or help. Others insert a slash command into the input so you can finish the argument yourself, such as `/export ` or `/permissions `.
 
-Tab completion is intentionally curated. It includes slash command names, aliases, common subcommands, common argument values, the active model, and recent session ids; it does not scan every possible filepath, external provider state, or remote tool registry.
+Tab completion is intentionally curated. It includes slash command names, aliases, common subcommands, common argument values, and the active model; it does not scan every possible filepath, external provider state, or remote tool registry.
 
 ---
 

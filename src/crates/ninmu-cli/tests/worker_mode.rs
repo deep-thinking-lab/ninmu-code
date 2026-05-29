@@ -228,6 +228,9 @@ impl FakeManagedService {
             while Instant::now() < deadline {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        stream
+                            .set_nonblocking(false)
+                            .expect("accepted stream should block while reading request");
                         let request = read_request(&mut stream);
                         let response = handle_request(&thread_state, &workspace, &request);
                         let _ = stream.write_all(response.as_bytes());
