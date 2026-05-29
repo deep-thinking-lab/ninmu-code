@@ -179,6 +179,24 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
         },
     ),
     (
+        "deepseek-v4-flash",
+        ProviderMetadata {
+            provider: ProviderKind::DeepSeek,
+            auth_env: "DEEPSEEK_API_KEY",
+            base_url_env: "DEEPSEEK_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_DEEPSEEK_BASE_URL,
+        },
+    ),
+    (
+        "deepseek-v4-pro",
+        ProviderMetadata {
+            provider: ProviderKind::DeepSeek,
+            auth_env: "DEEPSEEK_API_KEY",
+            base_url_env: "DEEPSEEK_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_DEEPSEEK_BASE_URL,
+        },
+    ),
+    (
         "mistral-large",
         ProviderMetadata {
             provider: ProviderKind::Mistral,
@@ -653,6 +671,12 @@ pub fn model_token_limit(model: &str) -> Option<ModelTokenLimit> {
         "deepseek-chat" | "deepseek-reasoner" => Some(ModelTokenLimit {
             max_output_tokens: 8_192,
             context_window_tokens: 131_072,
+        }),
+        // DeepSeek V4 models — 1M context
+        // Source: https://api-docs.deepseek.com
+        "deepseek-v4-flash" | "deepseek-v4-pro" => Some(ModelTokenLimit {
+            max_output_tokens: 64_000,
+            context_window_tokens: 1_000_000,
         }),
         // Kimi models via DashScope (Moonshot AI)
         // Source: https://platform.moonshot.cn/docs/intro

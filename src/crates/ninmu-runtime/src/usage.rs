@@ -96,6 +96,26 @@ pub fn pricing_for_model(model: &str) -> Option<ModelPricing> {
             cache_read_cost_per_million: 0.0,
         });
     }
+    if normalized.contains("deepseek-v4-flash") {
+        // V4 flash: cache hit is $0.0028/M, cache miss is $0.14/M
+        // We model this as a weighted input cost; the actual hit/miss breakdown
+        // is handled by the cache token fields returned by the API.
+        return Some(ModelPricing {
+            input_cost_per_million: 0.14,
+            output_cost_per_million: 0.28,
+            cache_creation_cost_per_million: 0.0,
+            cache_read_cost_per_million: 0.0028,
+        });
+    }
+    if normalized.contains("deepseek-v4-pro") {
+        // V4 pro: cache hit is $0.003625/M, cache miss is $0.435/M
+        return Some(ModelPricing {
+            input_cost_per_million: 0.435,
+            output_cost_per_million: 0.87,
+            cache_creation_cost_per_million: 0.0,
+            cache_read_cost_per_million: 0.003625,
+        });
+    }
     if normalized.contains("deepseek") {
         return Some(ModelPricing {
             input_cost_per_million: 0.27,
@@ -529,6 +549,35 @@ mod tests {
         // deepseek-r1 alias should resolve to reasoner pricing
         let r1_alias = pricing_for_model("deepseek-r1").expect("deepseek-r1 alias pricing");
         assert_eq!(r1_alias.output_cost_per_million, 2.19);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn deepseek_v4_flash_has_correct_pricing_with_cache() {
+        // V4 flash: miss=$0.14/M, hit=$0.0028/M, output=$0.28/M
+        let flash_pricing = pricing_for_model("deepseek-v4-flash").expect("v4 flash pricing");
+        assert_eq!(flash_pricing.input_cost_per_million, 0.14);
+        assert_eq!(flash_pricing.output_cost_per_million, 0.28);
+        assert_eq!(flash_pricing.cache_read_cost_per_million, 0.0028);
+        assert_eq!(flash_pricing.cache_creation_cost_per_million, 0.0);
+
+        // Compute cost with cache split:
+        // 200K miss @ $0.14/M + 800K hit @ $0.0028/M + 50K output @ $0.28/M
+        let usage = TokenUsage {
+            input_tokens: 200_000,       // uncached input only
+            output_tokens: 50_000,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 800_000,  // cache hits
+        };
+        let cost = usage.estimate_cost_usd_with_pricing(flash_pricing);
+        let expected_miss_cost = 200_000.0 / 1_000_000.0 * 0.14;
+        let expected_hit_cost = 800_000.0 / 1_000_000.0 * 0.0028;
+        let expected_output_cost = 50_000.0 / 1_000_000.0 * 0.28;
+        assert!((cost.input_cost_usd - expected_miss_cost).abs() < 1e-9);
+        assert!((cost.cache_read_cost_usd - expected_hit_cost).abs() < 1e-9);
+        assert!((cost.output_cost_usd - expected_output_cost).abs() < 1e-9);
+        // Total should be $0.028 + $0.00224 + $0.014 = $0.04424
+        assert!((cost.total_cost_usd() - 0.044_24).abs() < 1e-9);
     }
 
     #[test]

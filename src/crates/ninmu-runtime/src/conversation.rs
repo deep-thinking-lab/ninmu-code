@@ -4,9 +4,17 @@ use std::fmt::{Display, Formatter};
 use ninmu_telemetry::SessionTracer;
 use serde_json::{Map, Value};
 
+use crate::cache_stable::{
+    compact_cache_stable, CacheStableCompactionConfig, CacheStableState,
+};
 use crate::compact::{
     compact_session, estimate_session_tokens, CompactionConfig, CompactionResult,
 };
+
+/// `NEEDS_PRO` marker — when detected in assistant output, the turn should
+/// be retried on a more capable model (e.g. v4-pro).
+const NEEDS_PRO_MARKER: &str = "<<<NEEDS_PRO";
+const SUMMARY_FLASH_MODEL_HINT: &str = "deepseek-v4-flash";
 use crate::config::RuntimeFeatureConfig;
 use crate::hooks::{HookAbortSignal, HookProgressReporter, HookRunResult, HookRunner};
 use crate::permissions::{
@@ -115,6 +123,11 @@ pub struct TurnSummary {
     pub iterations: usize,
     pub usage: TokenUsage,
     pub auto_compaction: Option<AutoCompactionEvent>,
+    /// When true, the model emitted `<<<NEEDS_PRO>>>` indicating this turn
+    /// should be retried on a more capable model (e.g. v4-pro).
+    pub needs_pro: bool,
+    /// The escalated model name if needs_pro was detected.
+    pub escalated_model: Option<String>,
 }
 
 /// Details about automatic session compaction applied during a turn.
@@ -137,6 +150,15 @@ pub struct ConversationRuntime<C, T> {
     hook_abort_signal: HookAbortSignal,
     hook_progress_reporter: Option<Box<dyn HookProgressReporter>>,
     session_tracer: Option<SessionTracer>,
+    /// When enabled, compaction preserves the immutable prefix for DeepSeek
+    /// prefix-cache stability (append-only log, no message-list replacement).
+    cache_stable: bool,
+    /// When enabled, the model can signal it needs a more capable model
+    /// by emitting `NEEDS_PRO` in its output (checked after each turn).
+    needs_pro_escalation: bool,
+    /// The model to use when escalation is triggered (defaults to inferring
+    /// from the current model name — v4-flash → v4-pro).
+    escalation_model: Option<String>,
 }
 
 impl<C, T> ConversationRuntime<C, T>
@@ -186,6 +208,9 @@ where
             hook_abort_signal: HookAbortSignal::default(),
             hook_progress_reporter: None,
             session_tracer: None,
+            cache_stable: false,
+            needs_pro_escalation: false,
+            escalation_model: None,
         }
     }
 
@@ -220,6 +245,52 @@ where
     pub fn with_session_tracer(mut self, session_tracer: SessionTracer) -> Self {
         self.session_tracer = Some(session_tracer);
         self
+    }
+
+    /// Enable DeepSeek prefix-cache stability mode.
+    /// When enabled, compaction preserves the immutable prefix by appending
+    /// summaries instead of replacing the message list.
+    #[must_use]
+    pub fn with_cache_stable(mut self, enabled: bool) -> Self {
+        self.cache_stable = enabled;
+        self
+    }
+
+    /// Enable `NEEDS_PRO` escalation — allows the model to request a more
+    /// capable tier (e.g. v4-pro) when the current turn exceeds what the
+    /// flash model can handle.
+    #[must_use]
+    pub fn with_needs_pro_escalation(mut self, enabled: bool) -> Self {
+        self.needs_pro_escalation = enabled;
+        self
+    }
+
+    /// Returns `true` when cache-stable mode is active.
+    #[must_use]
+    pub fn is_cache_stable(&self) -> bool {
+        self.cache_stable
+    }
+
+    /// Returns `true` when NEEDS_PRO escalation is enabled.
+    #[must_use]
+    pub fn needs_pro_escalation_enabled(&self) -> bool {
+        self.needs_pro_escalation
+    }
+
+    /// Set a custom escalation model (e.g. "deepseek-v4-pro" for flash → pro).
+    /// If not set, defaults are inferred from the current model name.
+    #[must_use]
+    pub fn with_escalation_model(mut self, model: impl Into<String>) -> Self {
+        self.escalation_model = Some(model.into());
+        self
+    }
+
+    /// Returns the escalation model to use.
+    #[must_use]
+    pub fn escalation_model(&self) -> String {
+        self.escalation_model
+            .clone()
+            .unwrap_or_else(|| escalate_model_name(&self.session.model))
     }
 
     fn run_pre_tool_use_hook(&mut self, tool_name: &str, input: &str) -> HookRunResult {
@@ -503,6 +574,18 @@ where
 
         let auto_compaction = self.maybe_auto_compact();
 
+        let needs_pro = self.needs_pro_escalation
+            && assistant_messages
+                .iter()
+                .flat_map(|m| m.blocks.iter())
+                .any(|block| detect_needs_pro(block));
+
+        let escalated_model = if needs_pro {
+            Some(self.escalation_model())
+        } else {
+            None
+        };
+
         let summary = TurnSummary {
             assistant_messages,
             tool_results,
@@ -510,6 +593,8 @@ where
             iterations,
             usage: self.usage_tracker.cumulative_usage(),
             auto_compaction,
+            needs_pro,
+            escalated_model,
         };
         self.record_turn_completed(&summary);
 
@@ -569,22 +654,42 @@ where
             return None;
         }
 
-        let result = compact_session(
-            &self.session,
-            CompactionConfig {
-                max_estimated_tokens: 0,
-                ..CompactionConfig::default()
-            },
-        );
+        if self.cache_stable {
+            // Cache-stable compaction preserves the immutable prefix for
+            // DeepSeek prefix-cache stability — appends summary rather than
+            // replacing the entire message list.
+            let cache_state = CacheStableState::from_session(&self.session);
+            let config = CacheStableCompactionConfig {
+                cache_state,
+                preserve_recent_messages: 6,
+                summary_text: None,
+            };
+            let result = compact_cache_stable(&self.session, &config);
+            if !result.compacted || result.removed_message_count == 0 {
+                return None;
+            }
+            self.session = result.session;
+            Some(AutoCompactionEvent {
+                removed_message_count: result.removed_message_count,
+            })
+        } else {
+            let result = compact_session(
+                &self.session,
+                CompactionConfig {
+                    max_estimated_tokens: 0,
+                    ..CompactionConfig::default()
+                },
+            );
 
-        if result.removed_message_count == 0 {
-            return None;
+            if result.removed_message_count == 0 {
+                return None;
+            }
+
+            self.session = result.compacted_session;
+            Some(AutoCompactionEvent {
+                removed_message_count: result.removed_message_count,
+            })
         }
-
-        self.session = result.compacted_session;
-        Some(AutoCompactionEvent {
-            removed_message_count: result.removed_message_count,
-        })
     }
 
     fn record_turn_started(&self, user_input: &str) {
@@ -798,6 +903,48 @@ fn format_hook_message(result: &HookRunResult, fallback: &str) -> String {
     } else {
         result.messages().join("\n")
     }
+}
+
+/// Infers the escalated model from a base model name.
+/// flash → pro, chat → reasoner, etc.
+#[must_use]
+pub fn escalate_model_name(base_model: &Option<String>) -> String {
+    let model = match base_model {
+        Some(m) => m.as_str(),
+        None => "deepseek-v4-flash",
+    };
+    if model.contains("flash") {
+        model.replace("flash", "pro")
+    } else if model.contains("chat") {
+        model.replace("chat", "reasoner")
+    } else if model.contains("haiku") {
+        model.replace("haiku", "sonnet")
+    } else if model.contains("sonnet") {
+        model.replace("sonnet", "opus")
+    } else {
+        "deepseek-v4-pro".to_string()
+    }
+}
+
+/// Scans a content block for the `<<<NEEDS_PRO>>>` marker.
+/// Returns `true` if the block contains an escalation request.
+#[must_use]
+pub fn detect_needs_pro(block: &ContentBlock) -> bool {
+    match block {
+        ContentBlock::Text { text }
+        | ContentBlock::Thinking { thinking: text } => {
+            text.trim().starts_with(NEEDS_PRO_MARKER)
+        }
+        ContentBlock::ToolUse { .. } => false,
+        ContentBlock::ToolResult { .. } => false,
+    }
+}
+
+/// Returns the recommended flash model for summarization/compaction tasks.
+/// These don't need pro-level reasoning — flash is sufficient and cheaper.
+#[must_use]
+pub fn summary_flash_model_hint() -> &'static str {
+    SUMMARY_FLASH_MODEL_HINT
 }
 
 fn merge_hook_feedback(messages: &[String], output: String, is_error: bool) -> String {
