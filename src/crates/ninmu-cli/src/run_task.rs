@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -74,6 +75,11 @@ pub(crate) fn run_task(
             "run-task only supports --output-format json".to_string(),
         ));
     }
+    if input.is_some() && manifest.is_some() {
+        return Err(RunTaskError::Process(
+            "cannot use --manifest and --input together".to_string(),
+        ));
+    }
 
     let request = if let Some(path) = manifest {
         read_manifest_request(&path, workdir)?
@@ -93,18 +99,8 @@ pub(crate) fn run_task(
         return Ok(());
     }
 
-    let effective_event_format = if request.project_profile.as_ref().is_some_and(|profile| {
-        profile
-            .get("substrate")
-            .and_then(serde_json::Value::as_object)
-            .is_some()
-    }) {
-        EventFormat::Substrate
-    } else {
-        event_format
-    };
     let mut events = match event_log {
-        Some(path) => TaskEventSink::file(path, effective_event_format, &request)
+        Some(path) => TaskEventSink::file(path, event_format, &request)
             .map_err(|error| RunTaskError::Process(format!("failed to open event log: {error}")))?,
         None => TaskEventSink::disabled(),
     };
@@ -304,6 +300,7 @@ fn execute_task(request: &HarnessTaskRequest) -> Result<HarnessTaskResult, RunTa
         .model
         .clone()
         .unwrap_or_else(|| crate::DEFAULT_MODEL.to_string());
+    let _provenance_env = TaskProvenanceEnv::set(request);
     let mut cli = LiveCli::new(model.clone(), true, allowed_tools, permission_mode, None)
         .map_err(|error| RunTaskError::Process(error.to_string()))?;
     let summary = cli
@@ -357,6 +354,57 @@ impl Drop for CwdGuard {
     fn drop(&mut self) {
         let _ = env::set_current_dir(&self.original);
     }
+}
+
+struct TaskProvenanceEnv {
+    _guards: Vec<EnvVarGuard>,
+}
+
+impl TaskProvenanceEnv {
+    fn set(request: &HarnessTaskRequest) -> Self {
+        let agent_id = substrate_agent_id(request).map_or_else(
+            || substrate_types::AgentId::new().to_string(),
+            ToString::to_string,
+        );
+        Self {
+            _guards: vec![
+                EnvVarGuard::set("NINMU_CODE_AGENT_ID", agent_id),
+                EnvVarGuard::set("NINMU_CODE_MISSION_ID", request.mission_id.clone()),
+                EnvVarGuard::set("NINMU_CODE_TASK_ID", request.task_id.clone()),
+            ],
+        }
+    }
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: String) -> Self {
+        let previous = env::var_os(key);
+        env::set_var(key, value);
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => env::set_var(self.key, value),
+            None => env::remove_var(self.key),
+        }
+    }
+}
+
+fn substrate_agent_id(request: &HarnessTaskRequest) -> Option<&str> {
+    request
+        .project_profile
+        .as_ref()?
+        .get("substrate")?
+        .get("agent_id")?
+        .as_str()
 }
 
 fn task_prompt(request: &HarnessTaskRequest) -> String {

@@ -62,7 +62,7 @@ impl TaskEventSink {
         }
         self.sequence += 1;
         let payload = self.bound_payload(task_id, kind, payload)?;
-        if self.format == EventFormat::Substrate {
+        if self.format == EventFormat::Substrate && self.substrate_context.is_some() {
             return self.emit_substrate(kind, payload);
         }
         let event = HarnessEvent {
@@ -105,9 +105,9 @@ impl TaskEventSink {
         fs::create_dir_all(&artifact_dir)?;
         let artifact_path = artifact_dir.join(format!(
             "{}-{}-{}.json",
-            task_id,
+            safe_filename_part(task_id),
             kind.replace('.', "-"),
-            self.sequence + 1
+            self.sequence
         ));
         fs::write(&artifact_path, serde_json::to_vec(&payload)?)?;
         Ok(json!({
@@ -162,7 +162,7 @@ fn map_native_to_substrate(
             success: payload
                 .get("success")
                 .and_then(Value::as_bool)
-                .unwrap_or(true),
+                .unwrap_or(false),
             duration_ms: payload
                 .get("duration_ms")
                 .and_then(Value::as_u64)
@@ -255,6 +255,24 @@ fn display_path(path: &Path) -> String {
     path.display().to_string()
 }
 
+fn safe_filename_part(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() || sanitized == "." || sanitized == ".." {
+        "task".to_string()
+    } else {
+        sanitized
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -271,10 +289,11 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("temp root should exist");
         let event_log = root.join("events.ndjson");
+        let malicious_task_id = "../evil/task";
         let request = ninmu_runtime::harness_contract::HarnessTaskRequest {
             protocol: ninmu_runtime::harness_contract::HarnessProtocolVersion::V1Alpha1,
             mission_id: "mission".to_string(),
-            task_id: "task".to_string(),
+            task_id: malicious_task_id.to_string(),
             objective: "test".to_string(),
             workdir: root.display().to_string(),
             model: None,
@@ -292,18 +311,27 @@ mod tests {
 
         sink.emit(
             "mission",
-            "task",
+            malicious_task_id,
             "tool.completed",
             json!({"output": "x".repeat(70 * 1024)}),
         )
         .expect("event should emit");
 
-        let line = fs::read_to_string(event_log).expect("event log should exist");
+        let line = fs::read_to_string(&event_log).expect("event log should exist");
         let event: serde_json::Value =
             serde_json::from_str(line.trim()).expect("event should parse");
         let artifact = event["payload"]["artifact"]["path"]
             .as_str()
             .expect("artifact path should exist");
-        assert!(std::path::Path::new(artifact).exists());
+        let artifact_path = std::path::Path::new(artifact);
+        assert!(artifact_path.exists());
+        let artifact_dir = event_log.with_extension("artifacts");
+        assert_eq!(artifact_path.parent(), Some(artifact_dir.as_path()));
+        let file_name = artifact_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("artifact filename should be valid utf-8");
+        assert!(file_name.ends_with("-tool-completed-1.json"));
+        assert!(!file_name.contains('/'));
     }
 }

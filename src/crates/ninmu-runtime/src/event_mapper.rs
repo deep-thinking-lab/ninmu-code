@@ -73,7 +73,7 @@ impl EventMapper {
                 command,
                 exit_code,
                 duration_ms,
-                stderr_tail,
+                stderr_tail: _,
             } if *exit_code == 0 => EventKind::Verification(VerificationEvent::CommandPassed {
                 command: command.clone(),
                 duration_ms: *duration_ms,

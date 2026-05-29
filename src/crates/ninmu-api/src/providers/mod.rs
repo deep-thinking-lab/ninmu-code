@@ -755,7 +755,7 @@ const FOREIGN_PROVIDER_ENV_VARS: &[(&str, &str, &str)] = &[
     (
         "DASHSCOPE_API_KEY",
         "Alibaba DashScope",
-        "prefix your model name with `qwen/` or `qwen-` (e.g. `--model qwen-plus`) so prefix routing selects the DashScope backend",
+        "use a bare DashScope model name with the `qwen-` prefix (e.g. `--model qwen-plus`) so prefix routing selects the DashScope backend",
     ),
 ];
 
@@ -1402,8 +1402,12 @@ NO_EQUALS_LINE
             "hint should identify the DashScope provider: {hint}"
         );
         assert!(
-            hint.contains("qwen"),
+            hint.contains("qwen-"),
             "hint should suggest a qwen-prefixed model alias: {hint}"
+        );
+        assert!(
+            !hint.contains("qwen/"),
+            "hint should not route qwen/ aliases to DashScope: {hint}"
         );
     }
 

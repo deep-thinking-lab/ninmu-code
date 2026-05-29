@@ -1,0 +1,16 @@
+[package]
+name = "substrate-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared types for the Substrate agentic software factory platform"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+uuid = { version = "1", features = ["v7", "serde"] }
+
+[dev-dependencies]
+pretty_assertions = "1"

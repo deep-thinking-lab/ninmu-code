@@ -761,6 +761,7 @@ pub(crate) fn parse_run_task_args(
     let mut workdir = None;
     let mut event_log = None;
     let mut event_format = crate::run_task::EventFormat::Native;
+    let mut event_format_explicit = false;
     let mut dry_run = false;
     let mut index = 0;
     while index < args.len() {
@@ -814,10 +815,12 @@ pub(crate) fn parse_run_task_args(
                     .get(index + 1)
                     .ok_or_else(|| "missing value for --event-format".to_string())?;
                 event_format = parse_event_format(value)?;
+                event_format_explicit = true;
                 index += 2;
             }
             flag if flag.starts_with("--event-format=") => {
                 event_format = parse_event_format(&flag[15..])?;
+                event_format_explicit = true;
                 index += 1;
             }
             "--dry-run" => {
@@ -830,10 +833,13 @@ pub(crate) fn parse_run_task_args(
     if input.is_some() && manifest.is_some() {
         return Err("cannot use --manifest and --input together".to_string());
     }
+    if workdir.is_some() && manifest.is_none() {
+        return Err("--workdir requires --manifest".to_string());
+    }
     if input.is_none() && manifest.is_none() {
         return Err("run-task requires --input <path|-> or --manifest <path>".to_string());
     }
-    if manifest.is_some() {
+    if manifest.is_some() && !event_format_explicit {
         event_format = crate::run_task::EventFormat::Substrate;
     }
     Ok(CliAction::RunTask {

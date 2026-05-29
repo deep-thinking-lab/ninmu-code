@@ -45,6 +45,7 @@ fn oamp_client_builds_write_request_with_provenance() {
     assert_eq!(request.content, "learned that auth uses JWT");
     assert_eq!(request.provenance.agent_id, agent_id.to_string());
     assert_eq!(request.provenance.mission_id, mission_id.to_string());
+    assert_eq!(request.provenance.task_id, task_id.to_string());
 }
 
 #[tokio::test]
@@ -60,7 +61,8 @@ async fn oamp_client_handles_connection_failure() {
     let result = client.recall("test query").await;
 
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("connection"));
+    let err = result.unwrap_err().to_string().to_lowercase();
+    assert!(err.contains("connect"), "unexpected error: {err}");
 }
 
 #[test]

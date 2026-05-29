@@ -950,6 +950,7 @@ fn parse_run_task_args(
     let mut workdir = None;
     let mut event_log = None;
     let mut event_format = run_task::EventFormat::Native;
+    let mut event_format_explicit = false;
     let mut dry_run = false;
     let mut index = 0;
     while index < args.len() {
@@ -1003,10 +1004,12 @@ fn parse_run_task_args(
                     .get(index + 1)
                     .ok_or_else(|| "missing value for --event-format".to_string())?;
                 event_format = parse_event_format(value)?;
+                event_format_explicit = true;
                 index += 2;
             }
             flag if flag.starts_with("--event-format=") => {
                 event_format = parse_event_format(&flag[15..])?;
+                event_format_explicit = true;
                 index += 1;
             }
             "--dry-run" => {
@@ -1019,10 +1022,13 @@ fn parse_run_task_args(
     if input.is_some() && manifest.is_some() {
         return Err("cannot use --manifest and --input together".to_string());
     }
+    if workdir.is_some() && manifest.is_none() {
+        return Err("--workdir requires --manifest".to_string());
+    }
     if input.is_none() && manifest.is_none() {
         return Err("run-task requires --input <path|-> or --manifest <path>".to_string());
     }
-    if manifest.is_some() {
+    if manifest.is_some() && !event_format_explicit {
         event_format = run_task::EventFormat::Substrate;
     }
     Ok(CliAction::RunTask {
@@ -6714,6 +6720,39 @@ UU conflicted.rs",
             {
                 assert_eq!(reasoning_effort.as_deref(), Some(value));
             }
+        }
+    }
+
+    #[test]
+    fn run_task_rejects_workdir_without_manifest() {
+        let err = parse_args(&[
+            "run-task".to_string(),
+            "--input".to_string(),
+            "task.json".to_string(),
+            "--workdir".to_string(),
+            "/tmp/work".to_string(),
+        ])
+        .expect_err("--workdir without --manifest should fail");
+
+        assert_eq!(err, "--workdir requires --manifest");
+    }
+
+    #[test]
+    fn run_task_manifest_keeps_explicit_native_event_format() {
+        let parsed = parse_args(&[
+            "run-task".to_string(),
+            "--manifest".to_string(),
+            "manifest.json".to_string(),
+            "--event-format".to_string(),
+            "native".to_string(),
+        ])
+        .expect("manifest run-task args should parse");
+
+        match parsed {
+            CliAction::RunTask { event_format, .. } => {
+                assert_eq!(event_format, crate::run_task::EventFormat::Native);
+            }
+            other => panic!("expected run-task action, got {other:?}"),
         }
     }
 

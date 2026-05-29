@@ -1,0 +1,81 @@
+apiVersion: substrate.deepthinking.dev/v1alpha1
+kind: FactoryCell
+metadata:
+  mission_id: "019722a0-0000-7000-8000-000000000001"
+  task_id: "019722a0-0000-7000-8000-000000000002"
+  project_id: "019722a0-0000-7000-8000-000000000003"
+  tenant_id: "019722a0-0000-7000-8000-000000000004"
+  cell_id: "019722a0-0000-7000-8000-000000000005"
+  agent_id: "019722a0-0000-7000-8000-000000000006"
+spec:
+  objective: "Implement the new payment webhook handler with retry logic"
+  repository:
+    provider: kizuna
+    instance: "forge.substrate.dev"
+    org: "acme"
+    repo: "payments-service"
+    base_ref: "main"
+    working_ref: "factory/payment-webhook"
+    agent_identity:
+      trust_level: 3
+      scopes:
+        - Read
+        - Write
+        - Merge
+  runtime:
+    isolation: microvm
+    image: "substrate/cell-rust-node:2026-05-27"
+    cpu: 4
+    memory_mb: 8192
+    timeout_ms: 1800000
+    network_policy:
+      type: allowlist
+      hosts:
+        - "registry.npmjs.org"
+        - "crates.io"
+        - "forge.substrate.dev"
+  agent:
+    harness: ninmu-code
+    model_policy:
+      type: fixed
+      model: "claude-sonnet-4-6"
+    max_steps: 32
+    max_prompt_tokens_per_call: 16384
+    max_total_tokens: 200000
+  memory:
+    peer_id: "kizuna-primary"
+    protocol: oamp
+    required_capabilities:
+      governance: true
+      provenance: true
+    grant:
+      sensitivity_ceiling: confidential
+      labels:
+        - "project/*"
+        - "team/payments"
+        - "domain/billing"
+  tools:
+    allowed:
+      - shell.readonly
+      - shell.test
+      - shell.write
+      - git.branch
+      - git.diff
+      - git.commit
+      - git.push
+      - scm.open_pr
+    approval_required:
+      - deploy.production
+      - secret.read
+  verification:
+    required_commands:
+      - "cargo test --workspace"
+      - "cargo clippy -- -D warnings"
+      - "cargo fmt --check"
+    artifact_checks:
+      max_patch_files: 20
+      require_tests_for_code_changes: true
+  output:
+    mode: draft_pr
+    include_report: true
+    include_replay_ref: true

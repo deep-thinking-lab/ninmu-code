@@ -19,9 +19,13 @@ impl ManifestAdapter {
         }
         let mut allowed_tools = BTreeSet::new();
         for class in &manifest.spec.tools.allowed {
-            if let Some(tool) = map_tool_class(class) {
-                allowed_tools.insert(tool.to_string());
-            }
+            let tool = map_tool_class(class).ok_or_else(|| {
+                ManifestAdapterError::Validation(format!(
+                    "unsupported manifest tool class `{}`",
+                    class.0
+                ))
+            })?;
+            allowed_tools.insert(tool.to_string());
         }
         let timeout_ms = manifest.spec.runtime.timeout_ms;
         Ok(HarnessTaskRequest {
@@ -78,7 +82,7 @@ fn map_tool_class(class: &ToolClass) -> Option<&'static str> {
         ToolClass::GIT_BRANCH
         | ToolClass::GIT_DIFF
         | ToolClass::GIT_COMMIT
-        | ToolClass::GIT_PUSH => Some("git"),
+        | ToolClass::GIT_PUSH => Some("bash"),
         _ => None,
     }
 }
@@ -117,7 +121,22 @@ mod tests {
             .expect("manifest should adapt");
 
         assert!(request.allowed_tools.contains(&"bash".to_string()));
-        assert!(request.allowed_tools.contains(&"git".to_string()));
+        assert!(!request.allowed_tools.contains(&"git".to_string()));
+    }
+
+    #[test]
+    fn adapter_rejects_unsupported_tool_class() {
+        let mut manifest = minimal_manifest();
+        manifest
+            .spec
+            .tools
+            .allowed
+            .push(substrate_types::ToolClass("secret.read".to_string()));
+
+        let error = ManifestAdapter::to_harness_request(&manifest, "/tmp/workdir")
+            .expect_err("unsupported tool class should be rejected");
+
+        assert!(error.to_string().contains("secret.read"));
     }
 
     #[test]

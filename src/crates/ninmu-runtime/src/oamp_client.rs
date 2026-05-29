@@ -82,7 +82,9 @@ impl OampClient {
             .json(&request)
             .send()
             .await
-            .map_err(|error| OampError::Connection(error.to_string()))?;
+            .map_err(|error| OampError::Connection(error.to_string()))?
+            .error_for_status()
+            .map_err(|error| OampError::Protocol(error.to_string()))?;
         response
             .json::<Vec<MemoryEntry>>()
             .await
@@ -105,7 +107,9 @@ impl OampClient {
             .json(&request)
             .send()
             .await
-            .map_err(|error| OampError::Connection(error.to_string()))?;
+            .map_err(|error| OampError::Connection(error.to_string()))?
+            .error_for_status()
+            .map_err(|error| OampError::Protocol(error.to_string()))?;
         Ok(())
     }
 

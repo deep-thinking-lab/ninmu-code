@@ -10,7 +10,7 @@ publish = false
 
 [workspace.dependencies]
 serde_json = "1"
-substrate-types = { git = "https://github.com/deep-thinking-lab/substrate.git" }
+substrate-types = { path = "crates/substrate-types" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -18,6 +18,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 substrate-types.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread"] }
+uuid = "1"
 
 [lints]
 workspace = true
