@@ -360,6 +360,10 @@ pub fn resolve_model_alias(model: &str) -> String {
 pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
     let canonical = resolve_model_alias(model);
 
+    if let Some(metadata) = builtin_provider_prefix_metadata(&canonical) {
+        return Some(metadata);
+    }
+
     // Check custom models from models.json first (user-defined overrides)
     if let Some(custom) = models_file::custom_metadata_for_model(&canonical) {
         return Some(custom);
@@ -390,36 +394,12 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             default_base_url: openai_compat::DEFAULT_DEEPSEEK_BASE_URL,
         });
     }
-    // Explicit provider-namespaced models (e.g. "openai/gpt-4.1-mini") must
-    // route to the correct provider regardless of which auth env vars are set.
-    // Without this, detect_provider_kind falls through to the auth-sniffer
-    // order and misroutes to Anthropic if ANTHROPIC_API_KEY is present.
-    if canonical.starts_with("openai/") || canonical.starts_with("gpt-") {
+    if canonical.starts_with("gpt-") {
         return Some(ProviderMetadata {
             provider: ProviderKind::OpenAi,
             auth_env: "OPENAI_API_KEY",
             base_url_env: "OPENAI_BASE_URL",
             default_base_url: openai_compat::DEFAULT_OPENAI_BASE_URL,
-        });
-    }
-    // Ollama local inference server. ollama/* prefix routes to Ollama.
-    if canonical.starts_with("ollama/") {
-        return Some(ProviderMetadata {
-            provider: ProviderKind::Ollama,
-            auth_env: "",
-            base_url_env: "OLLAMA_BASE_URL",
-            default_base_url: openai_compat::DEFAULT_OLLAMA_BASE_URL,
-        });
-    }
-    // Qwen models served outside Alibaba DashScope (local, third-party API).
-    // Use qwen/ prefix to route to the external Qwen provider.
-    // Bare qwen-* model names still route to DashScope for backward compat.
-    if canonical.starts_with("qwen/") {
-        return Some(ProviderMetadata {
-            provider: ProviderKind::Qwen,
-            auth_env: "QWEN_API_KEY",
-            base_url_env: "QWEN_BASE_URL",
-            default_base_url: "",
         });
     }
     // Alibaba DashScope compatible-mode endpoint. Bare qwen-* model names
@@ -430,15 +410,6 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             auth_env: "DASHSCOPE_API_KEY",
             base_url_env: "DASHSCOPE_BASE_URL",
             default_base_url: openai_compat::DEFAULT_DASHSCOPE_BASE_URL,
-        });
-    }
-    // vLLM local inference server. vllm/* prefix routes to vLLM.
-    if canonical.starts_with("vllm/") {
-        return Some(ProviderMetadata {
-            provider: ProviderKind::Vllm,
-            auth_env: "",
-            base_url_env: "VLLM_BASE_URL",
-            default_base_url: openai_compat::DEFAULT_VLLM_BASE_URL,
         });
     }
     // Mistral models (mistral-large, mistral-small, etc.).
@@ -476,6 +447,42 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             auth_env: "DASHSCOPE_API_KEY",
             base_url_env: "DASHSCOPE_BASE_URL",
             default_base_url: openai_compat::DEFAULT_DASHSCOPE_BASE_URL,
+        });
+    }
+    None
+}
+
+fn builtin_provider_prefix_metadata(canonical: &str) -> Option<ProviderMetadata> {
+    if canonical.starts_with("openai/") {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::OpenAi,
+            auth_env: "OPENAI_API_KEY",
+            base_url_env: "OPENAI_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OPENAI_BASE_URL,
+        });
+    }
+    if canonical.starts_with("ollama/") {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::Ollama,
+            auth_env: "",
+            base_url_env: "OLLAMA_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OLLAMA_BASE_URL,
+        });
+    }
+    if canonical.starts_with("qwen/") {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::Qwen,
+            auth_env: "QWEN_API_KEY",
+            base_url_env: "QWEN_BASE_URL",
+            default_base_url: "",
+        });
+    }
+    if canonical.starts_with("vllm/") {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::Vllm,
+            auth_env: "",
+            base_url_env: "VLLM_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_VLLM_BASE_URL,
         });
     }
     None

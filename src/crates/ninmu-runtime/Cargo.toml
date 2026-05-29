@@ -8,6 +8,7 @@ homepage = "https://ninmu.dev"
 description = "Conversation runtime and config for the Ninmu Code ecosystem"
 
 [dependencies]
+chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
 glob = "0.3"
 getrandom = "0.2"
@@ -16,9 +17,12 @@ ninmu-plugins = { version = "0.1.0", path = "../ninmu-plugins" }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
+substrate-types.workspace = true
 ninmu-telemetry = { version = "0.1.0", path = "../ninmu-telemetry" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "process", "rt", "rt-multi-thread", "time"] }
 walkdir = "2"
+uuid = { version = "1", features = ["v7"] }
 
 [dev-dependencies]
 tempfile = "3"

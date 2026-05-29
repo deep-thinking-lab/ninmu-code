@@ -30,6 +30,68 @@ use ninmu_runtime::{
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use substrate_types::SensitivityClass;
+
+#[derive(Debug, Clone)]
+pub struct RecallMemoryTool {
+    client: ninmu_runtime::oamp_client::OampClient,
+}
+
+impl RecallMemoryTool {
+    #[must_use]
+    pub fn new(client: ninmu_runtime::oamp_client::OampClient) -> Self {
+        Self { client }
+    }
+
+    pub async fn execute(&self, input: Value) -> Result<String, String> {
+        let query = input
+            .get("query")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "query is required".to_string())?;
+        let entries = self
+            .client
+            .recall(query)
+            .await
+            .map_err(|error| error.to_string())?;
+        serde_json::to_string_pretty(&ninmu_runtime::oamp_client::memory_entry_json(&entries))
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StoreMemoryTool {
+    client: ninmu_runtime::oamp_client::OampClient,
+    provenance: ninmu_runtime::oamp_client::Provenance,
+}
+
+impl StoreMemoryTool {
+    #[must_use]
+    pub fn new(
+        client: ninmu_runtime::oamp_client::OampClient,
+        provenance: ninmu_runtime::oamp_client::Provenance,
+    ) -> Self {
+        Self { client, provenance }
+    }
+
+    pub async fn execute(&self, input: Value) -> Result<String, String> {
+        let content = input
+            .get("content")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "content is required".to_string())?;
+        let sensitivity = input
+            .get("sensitivity")
+            .and_then(Value::as_str)
+            .map(ninmu_runtime::oamp_client::parse_sensitivity)
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or(SensitivityClass::Internal);
+        self.client
+            .write(content, &self.provenance, sensitivity)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(json!({"status": "stored"}).to_string())
+    }
+}
 
 /// Global task registry shared across tool invocations within a session.
 fn global_lsp_registry() -> &'static LspRegistry {
@@ -435,6 +497,33 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     "content": { "type": "string" }
                 },
                 "required": ["path", "content"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::WorkspaceWrite,
+        },
+        ToolSpec {
+            name: "recall_memory",
+            description: "Recall governed project memory via OAMP.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "store_memory",
+            description: "Store a governed memory entry via OAMP.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "content": { "type": "string" },
+                    "sensitivity": { "type": "string", "enum": ["public", "internal", "confidential", "restricted"] }
+                },
+                "required": ["content"],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::WorkspaceWrite,
@@ -1216,6 +1305,7 @@ fn execute_tool_with_enforcer(
             maybe_enforce_permission_check(enforcer, name, input)?;
             from_value::<WriteFileInput>(input).and_then(run_write_file)
         }
+        "recall_memory" | "store_memory" => execute_memory_tool(enforcer, name, input),
         "edit_file" => {
             maybe_enforce_permission_check(enforcer, name, input)?;
             from_value::<EditFileInput>(input).and_then(run_edit_file)
@@ -1292,6 +1382,55 @@ fn execute_tool_with_enforcer(
             from_value::<TestingPermissionInput>(input).and_then(run_testing_permission)
         }
         _ => Err(format!("unsupported tool: {name}")),
+    }
+}
+
+fn execute_memory_tool(
+    enforcer: Option<&PermissionEnforcer>,
+    name: &str,
+    input: &Value,
+) -> Result<String, String> {
+    maybe_enforce_permission_check(enforcer, name, input)?;
+    match name {
+        "recall_memory" => {
+            let tool = RecallMemoryTool::new(oamp_client_from_env()?);
+            block_on_memory_tool(tool.execute(input.clone()))
+        }
+        "store_memory" => {
+            let tool = StoreMemoryTool::new(oamp_client_from_env()?, provenance_from_env());
+            block_on_memory_tool(tool.execute(input.clone()))
+        }
+        _ => Err(format!("unknown memory tool: {name}")),
+    }
+}
+
+fn block_on_memory_tool(
+    future: impl std::future::Future<Output = Result<String, String>>,
+) -> Result<String, String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?
+        .block_on(future)
+}
+
+fn oamp_client_from_env() -> Result<ninmu_runtime::oamp_client::OampClient, String> {
+    let endpoint = std::env::var("OAMP_ENDPOINT")
+        .map_err(|_| "OAMP_ENDPOINT is required for memory tools".to_string())?;
+    Ok(ninmu_runtime::oamp_client::OampClient::new(
+        &endpoint,
+        substrate_types::MemoryGrant {
+            sensitivity_ceiling: SensitivityClass::Internal,
+            labels: Vec::new(),
+        },
+    ))
+}
+
+fn provenance_from_env() -> ninmu_runtime::oamp_client::Provenance {
+    ninmu_runtime::oamp_client::Provenance {
+        agent_id: substrate_types::AgentId::new(),
+        mission_id: substrate_types::MissionId::new(),
+        task_id: substrate_types::TaskId::new(),
     }
 }
 

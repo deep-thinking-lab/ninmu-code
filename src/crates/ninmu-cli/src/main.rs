@@ -38,6 +38,7 @@ mod file_ref;
 mod format;
 mod init;
 mod input;
+mod manifest_adapter;
 mod render;
 mod rpc_client;
 mod run_task;
@@ -397,10 +398,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         CliAction::RunTask {
             input,
+            manifest,
+            workdir,
             output_format,
             event_log,
+            event_format,
+            dry_run,
         } => {
-            if let Err(error) = run_task::run_task(input, output_format, event_log) {
+            if let Err(error) = run_task::run_task(
+                input,
+                manifest,
+                workdir,
+                output_format,
+                event_log,
+                event_format,
+                dry_run,
+            ) {
                 run_task::write_error_and_exit(error);
             }
         }
@@ -933,7 +946,11 @@ fn parse_run_task_args(
     output_format: CliOutputFormat,
 ) -> Result<CliAction, String> {
     let mut input = None;
+    let mut manifest = None;
+    let mut workdir = None;
     let mut event_log = None;
+    let mut event_format = run_task::EventFormat::Native;
+    let mut dry_run = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -959,14 +976,72 @@ fn parse_run_task_args(
                 event_log = Some(PathBuf::from(&flag[12..]));
                 index += 1;
             }
+            "--manifest" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --manifest".to_string())?;
+                manifest = Some(PathBuf::from(value));
+                index += 2;
+            }
+            flag if flag.starts_with("--manifest=") => {
+                manifest = Some(PathBuf::from(&flag[11..]));
+                index += 1;
+            }
+            "--workdir" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --workdir".to_string())?;
+                workdir = Some(PathBuf::from(value));
+                index += 2;
+            }
+            flag if flag.starts_with("--workdir=") => {
+                workdir = Some(PathBuf::from(&flag[10..]));
+                index += 1;
+            }
+            "--event-format" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --event-format".to_string())?;
+                event_format = parse_event_format(value)?;
+                index += 2;
+            }
+            flag if flag.starts_with("--event-format=") => {
+                event_format = parse_event_format(&flag[15..])?;
+                index += 1;
+            }
+            "--dry-run" => {
+                dry_run = true;
+                index += 1;
+            }
             other => return Err(format!("unknown run-task option: {other}")),
         }
     }
+    if input.is_some() && manifest.is_some() {
+        return Err("cannot use --manifest and --input together".to_string());
+    }
+    if input.is_none() && manifest.is_none() {
+        return Err("run-task requires --input <path|-> or --manifest <path>".to_string());
+    }
+    if manifest.is_some() {
+        event_format = run_task::EventFormat::Substrate;
+    }
     Ok(CliAction::RunTask {
-        input: input.ok_or_else(|| "run-task requires --input <path|->".to_string())?,
+        input,
+        manifest,
+        workdir,
         output_format,
         event_log,
+        event_format,
+        dry_run,
     })
+}
+
+fn parse_event_format(value: &str) -> Result<run_task::EventFormat, String> {
+    match value {
+        "native" => Ok(run_task::EventFormat::Native),
+        "substrate" => Ok(run_task::EventFormat::Substrate),
+        other => Err(format!("unsupported event format: {other}")),
+    }
 }
 
 fn parse_worker_args(

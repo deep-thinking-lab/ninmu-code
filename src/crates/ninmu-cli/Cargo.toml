@@ -19,6 +19,7 @@ path = "src/main.rs"
 ninmu-api = { version = "0.1.0", path = "../ninmu-api" }
 ninmu-commands = { version = "0.1.0", path = "../ninmu-commands" }
 ninmu-compat-harness = { version = "0.1.0", path = "../ninmu-compat-harness" }
+chrono = { version = "0.4", features = ["serde"] }
 crossterm = "0.28"
 gag = "1.0"
 pulldown-cmark = "0.13"
@@ -31,9 +32,12 @@ ninmu-plugins = { version = "0.1.0", path = "../ninmu-plugins" }
 ninmu-sdk = { version = "0.1.0", path = "../ninmu-sdk" }
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
+serde_yaml = "0.9"
+substrate-types.workspace = true
 syntect = "5"
 tokio = { version = "1", features = ["rt-multi-thread", "signal", "time"] }
 ninmu-tools = { version = "0.1.0", path = "../ninmu-tools" }
+uuid = "1"
 
 [lints]
 workspace = true
