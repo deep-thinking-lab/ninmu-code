@@ -1,6 +1,6 @@
-//! Cache-stable session wrapper for DeepSeek prefix-cache preservation.
+//! Cache-stable session wrapper for `DeepSeek` prefix-cache preservation.
 //!
-//! DeepSeek's automatic prefix caching keys on the exact byte sequence of
+//! `DeepSeek`'s automatic prefix caching keys on the exact byte sequence of
 //! the request. This module provides an append-only message log that (1)
 //! never rewrites the immutable prefix (system prompt + tool specs), and
 //! (2) compacts by appending summaries rather than replacing the message
@@ -12,10 +12,10 @@ use crate::session::{ContentBlock, ConversationMessage, MessageRole, Session};
 /// as cache-stable summaries (as opposed to initial system prompts).
 const CACHE_STABLE_PREFIX_MARKER: &str = "[CACHE-STABLE SUMMARY — prefix preserved]\n\n";
 
-/// Tracks the immutable prefix region of a session for DeepSeek cache stability.
+/// Tracks the immutable prefix region of a session for `DeepSeek` cache stability.
 ///
 /// The first N messages (system prompt + tool specs + few-shots) are frozen
-/// and NEVER rewritten. This ensures DeepSeek's byte-addressable prefix cache
+/// and NEVER rewritten. This ensures `DeepSeek`'s byte-addressable prefix cache
 /// hits every turn.
 #[derive(Debug, Clone)]
 pub struct CacheStableState {
@@ -88,7 +88,7 @@ impl CacheStableState {
 /// BEFORE the preserved tail, and then drops old messages from index
 /// `prefix_count..remove_up_to`. This ensures:
 ///
-/// - Messages[0..prefix_count] are NEVER rewritten — the prefix cache
+/// - Messages[`0..prefix_count`] are NEVER rewritten — the prefix cache
 ///   key remains unchanged across compactions.
 /// - The summary is appended as a new System message (which the model
 ///   treats as context, not instruction).
@@ -207,8 +207,10 @@ fn build_cache_stable_summary(messages: &[ConversationMessage]) -> String {
         .iter()
         .flat_map(|m| m.blocks.iter())
         .filter_map(|b| match b {
-            ContentBlock::ToolUse { name, .. } => Some(name.clone()),
-            ContentBlock::ToolResult { tool_name: name, .. } => Some(name.clone()),
+            ContentBlock::ToolUse { name, .. }
+            | ContentBlock::ToolResult {
+                tool_name: name, ..
+            } => Some(name.clone()),
             _ => None,
         })
         .collect::<std::collections::BTreeSet<String>>()
@@ -217,8 +219,13 @@ fn build_cache_stable_summary(messages: &[ConversationMessage]) -> String {
 
     let mut lines = vec![
         "Earlier conversation context (compacted for space efficiency):".to_string(),
-        format!("- {} earlier turns ({} user, {} assistant, {} tool)", 
-            messages.len(), user_count, assistant_count, tool_count),
+        format!(
+            "- {} earlier turns ({} user, {} assistant, {} tool)",
+            messages.len(),
+            user_count,
+            assistant_count,
+            tool_count
+        ),
     ];
 
     if !tool_names.is_empty() {
@@ -275,12 +282,14 @@ mod tests {
         }
         // Add non-prefix messages
         for _ in 0..(total_messages - prefix_count) {
-            session.messages.push(ConversationMessage::user_text("hello"));
-            session.messages.push(ConversationMessage::assistant(vec![
-                ContentBlock::Text {
+            session
+                .messages
+                .push(ConversationMessage::user_text("hello"));
+            session
+                .messages
+                .push(ConversationMessage::assistant(vec![ContentBlock::Text {
                     text: "ok".to_string(),
-                },
-            ]));
+                }]));
         }
         session
     }
@@ -316,8 +325,7 @@ mod tests {
 
         // The first message (prefix) should be unchanged
         assert_eq!(
-            result.session.messages[0],
-            session.messages[0],
+            result.session.messages[0], session.messages[0],
             "prefix must be preserved byte-for-byte"
         );
 
@@ -331,7 +339,7 @@ mod tests {
             result.session.messages[1]
                 .blocks
                 .first()
-                .map_or(false, |b| matches!(b, ContentBlock::Text { text } if text.starts_with(CACHE_STABLE_PREFIX_MARKER))),
+                .is_some_and(|b| matches!(b, ContentBlock::Text { text } if text.starts_with(CACHE_STABLE_PREFIX_MARKER))),
             "summary should start with cache-stable marker"
         );
 
@@ -366,12 +374,18 @@ mod tests {
         let session2 = make_session_with_prefix(1, 6);
 
         let config1 = CacheStableCompactionConfig {
-            cache_state: CacheStableState { prefix_message_count: 1, prefix_estimated_tokens: 0 },
+            cache_state: CacheStableState {
+                prefix_message_count: 1,
+                prefix_estimated_tokens: 0,
+            },
             preserve_recent_messages: 2,
             summary_text: None,
         };
         let config2 = CacheStableCompactionConfig {
-            cache_state: CacheStableState { prefix_message_count: 1, prefix_estimated_tokens: 0 },
+            cache_state: CacheStableState {
+                prefix_message_count: 1,
+                prefix_estimated_tokens: 0,
+            },
             preserve_recent_messages: 2,
             summary_text: None,
         };

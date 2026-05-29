@@ -1122,7 +1122,7 @@ impl OpenAiUsage {
     }
 
     /// Returns the number of uncached input tokens.
-    /// For both OpenAI and DeepSeek, `prompt_tokens` includes cache hits,
+    /// For both `OpenAI` and `DeepSeek`, `prompt_tokens` includes cache hits,
     /// so we subtract them to avoid double-counting.
     fn uncached_input_tokens(&self) -> u32 {
         let hit = self.cache_read_input_tokens();
@@ -1419,13 +1419,20 @@ pub fn build_chat_completion_request(
         // Standard OpenAI-compatible providers accept top-level `thinking`.
         payload["thinking"] = thinking_val.clone();
         // DeepSeek V4 uses `extra_body.thinking` instead of top-level.
-        // Send both to maximize compatibility.
-        payload["extra_body"] = json!({
-            "thinking": thinking_val
-        });
+        if is_deepseek_v4_model(&request.model) {
+            payload["extra_body"] = json!({
+                "thinking": thinking_val
+            });
+        }
     }
 
     payload
+}
+
+fn is_deepseek_v4_model(model: &str) -> bool {
+    let lowered = model.to_ascii_lowercase();
+    let canonical = lowered.rsplit('/').next().unwrap_or(lowered.as_str());
+    canonical.starts_with("deepseek-v4")
 }
 
 /// Returns true for models that do NOT support the `is_error` field in tool results.
@@ -3242,6 +3249,41 @@ mod tests {
             payload["thinking"],
             json!({"type": "disabled"}),
             "thinking mode disabled must produce thinking.disabled"
+        );
+    }
+
+    #[test]
+    fn thinking_extra_body_is_only_emitted_for_deepseek_v4() {
+        let deepseek_reasoner = build_chat_completion_request(
+            &MessageRequest {
+                model: "deepseek-reasoner".to_string(),
+                max_tokens: 1024,
+                messages: vec![InputMessage::user_text("think")],
+                thinking_mode: Some(true),
+                ..Default::default()
+            },
+            OpenAiCompatConfig::deepseek(),
+        );
+        assert_eq!(deepseek_reasoner["thinking"], json!({"type": "enabled"}));
+        assert!(
+            deepseek_reasoner.get("extra_body").is_none(),
+            "non-V4 DeepSeek models should not receive DeepSeek V4 extra_body"
+        );
+
+        let deepseek_v4 = build_chat_completion_request(
+            &MessageRequest {
+                model: "deepseek/deepseek-v4-flash".to_string(),
+                max_tokens: 1024,
+                messages: vec![InputMessage::user_text("think")],
+                thinking_mode: Some(true),
+                ..Default::default()
+            },
+            OpenAiCompatConfig::deepseek(),
+        );
+        assert_eq!(deepseek_v4["thinking"], json!({"type": "enabled"}));
+        assert_eq!(
+            deepseek_v4["extra_body"],
+            json!({"thinking": {"type": "enabled"}})
         );
     }
 

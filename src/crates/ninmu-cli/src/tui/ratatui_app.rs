@@ -1108,7 +1108,7 @@ impl RatatuiApp {
         }
 
         let current = self.cached_input.clone();
-        if current.trim().contains('\n') {
+        if current.contains('\n') {
             self.slash_completion = None;
             return;
         }
@@ -1193,7 +1193,7 @@ impl RatatuiApp {
         }
 
         let width = input_area.width.min(60).saturating_sub(2);
-        let height = (visible as u16 + 2).min(input_area.y);
+        let height = (visible as u16 + 3).min(input_area.y);
         let x = input_area.x.saturating_add(1);
         let y = input_area.y.saturating_sub(height);
         let area = Rect::new(x, y, width, height);
@@ -1212,7 +1212,9 @@ impl RatatuiApp {
             Span::styled(state.query.clone(), Style::default().fg(TEXT_SEC)),
             Span::styled("  Tab cycles", Style::default().fg(MUTED)),
         ]));
-        for (idx, candidate) in state.matches.iter().take(visible).enumerate() {
+        let start = state.selected.saturating_add(1).saturating_sub(visible);
+        for (offset, candidate) in state.matches.iter().skip(start).take(visible).enumerate() {
+            let idx = start + offset;
             let selected = idx == state.selected;
             let style = if selected {
                 Style::default().fg(BG).bg(ACCENT)
@@ -1554,7 +1556,11 @@ impl RatatuiApp {
             TuiEvent::ModelUpdate { model } => {
                 self.model = model;
                 self.model_pricing = ninmu_runtime::pricing_for_model(&self.model);
+                self.slash_completion_candidates = None;
                 self.rebuild_header();
+                if self.slash_completion.is_some() {
+                    self.refresh_slash_completion();
+                }
             }
             TuiEvent::PromptCache(event) => {
                 let prefix = if event.unexpected {
@@ -3955,6 +3961,45 @@ mod tests {
     }
 
     #[test]
+    fn slash_completion_disables_for_any_multiline_input() {
+        let mut app = RatatuiApp::new("sonnet".into(), "write".into(), None);
+        app.slash_completion_candidates = Some(vec!["/foo\nbar".to_string()]);
+        app.set_input_text("/foo\n");
+
+        assert!(
+            app.slash_completion.is_none(),
+            "slash completion must be disabled as soon as input contains a newline"
+        );
+    }
+
+    #[test]
+    fn slash_completion_overlay_keeps_selected_candidate_visible() {
+        let mut app = RatatuiApp::new("sonnet".into(), "write".into(), None);
+        app.slash_completion = Some(SlashCompletionState {
+            query: "/".to_string(),
+            matches: vec![
+                "/one".to_string(),
+                "/two".to_string(),
+                "/three".to_string(),
+                "/four".to_string(),
+                "/five".to_string(),
+                "/six".to_string(),
+                "/seven".to_string(),
+            ],
+            selected: 6,
+            inserted_once: true,
+        });
+
+        let rendered = app.render_to_text(100, 30);
+
+        assert!(rendered.contains("/seven"), "rendered frame:\n{rendered}");
+        assert!(
+            rendered.contains(" > /seven"),
+            "rendered frame:\n{rendered}"
+        );
+    }
+
+    #[test]
     fn slash_completion_tab_cycles_candidates_from_original_query() {
         let mut app = RatatuiApp::new("sonnet".into(), "write".into(), None);
         app.set_input_text("/p");
@@ -3972,6 +4017,23 @@ mod tests {
                 .map(|completion| completion.query.as_str()),
             Some("/p")
         );
+    }
+
+    #[test]
+    fn slash_completion_candidates_refresh_after_model_update() {
+        let initial_model = "anthropic/claude-sonnet-4-6";
+        let mut app = RatatuiApp::new(initial_model.into(), "write".into(), None);
+        assert!(app
+            .slash_completion_candidates()
+            .contains(&format!("/model {initial_model}")));
+
+        app.process_event(TuiEvent::ModelUpdate {
+            model: "openai/gpt-4o".to_string(),
+        });
+
+        let candidates = app.slash_completion_candidates();
+        assert!(candidates.contains(&"/model openai/gpt-4o".to_string()));
+        assert!(!candidates.contains(&format!("/model {initial_model}")));
     }
 
     #[test]

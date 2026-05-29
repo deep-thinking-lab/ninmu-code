@@ -111,7 +111,7 @@ On narrow terminals, the same information is condensed into the main layout and 
 
 ### Input Dock
 
-The input dock is where you write prompts and slash commands. It supports cursor movement, prompt history, multi-line prompts, and slash completion for command names plus common curated arguments such as permission modes, config actions, model aliases, and recent session ids.
+The input dock is where you write prompts and slash commands. It supports cursor movement, prompt history, multi-line prompts, and slash completion for command names plus common curated arguments such as permission modes, config actions, and model aliases.
 
 ---
 

@@ -113,7 +113,7 @@ pub fn pricing_for_model(model: &str) -> Option<ModelPricing> {
             input_cost_per_million: 0.435,
             output_cost_per_million: 0.87,
             cache_creation_cost_per_million: 0.0,
-            cache_read_cost_per_million: 0.003625,
+            cache_read_cost_per_million: 0.003_625,
         });
     }
     if normalized.contains("deepseek") {
@@ -564,10 +564,10 @@ mod tests {
         // Compute cost with cache split:
         // 200K miss @ $0.14/M + 800K hit @ $0.0028/M + 50K output @ $0.28/M
         let usage = TokenUsage {
-            input_tokens: 200_000,       // uncached input only
+            input_tokens: 200_000, // uncached input only
             output_tokens: 50_000,
             cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 800_000,  // cache hits
+            cache_read_input_tokens: 800_000, // cache hits
         };
         let cost = usage.estimate_cost_usd_with_pricing(flash_pricing);
         let expected_miss_cost = 200_000.0 / 1_000_000.0 * 0.14;

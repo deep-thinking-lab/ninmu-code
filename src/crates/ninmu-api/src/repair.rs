@@ -1,25 +1,25 @@
-//! Tool-call repair pipeline — DeepSeek-specific failure-mode recovery.
+//! Tool-call repair pipeline — `DeepSeek`-specific failure-mode recovery.
 //!
-//! DeepSeek R1/V4 models have specific tool-call failure modes that this
+//! `DeepSeek` R1/V4 models have specific tool-call failure modes that this
 //! module addresses:
 //!
 //! - **Scavenge**: R1 emits valid tool-call JSON inside `<think>` blocks
 //!   but forgets to put it in the declared `tool_calls` field.
-//! - **Flatten**: DeepSeek drops arguments when JSON schemas have >10 leaf
+//! - **Flatten**: `DeepSeek` drops arguments when JSON schemas have >10 leaf
 //!   params or nesting depth >2. Flatten to dot-notation and re-nest.
 //! - **Storm**: Model calls the same tool with identical args in a loop.
 //!   Suppress after N identical calls within a sliding window.
 //! - **Truncation**: `max_tokens` clips JSON mid-structure → unbalanced
 //!   braces. Repair by closing them.
 
-use std::collections::{BTreeMap, VecDeque};
 use serde_json::Value;
+use std::collections::{BTreeMap, VecDeque};
 
 // ---------------------------------------------------------------------------
 // Scavenge
 // ---------------------------------------------------------------------------
 
-/// A tool call recovered from reasoning_content by the scavenger.
+/// A tool call recovered from `reasoning_content` by the scavenger.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScavengedCall {
     pub name: String,
@@ -30,7 +30,7 @@ pub struct ScavengedCall {
 /// Where a scavenged call was found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScavengeSource {
-    /// From a `{name, arguments}` JSON object in reasoning_content.
+    /// From a `{name, arguments}` JSON object in `reasoning_content`.
     RawJson,
     /// From an OpenAI-style `{type: "function", function: {name, arguments}}`.
     OpenAiStyle,
@@ -38,7 +38,7 @@ pub enum ScavengeSource {
     R1Freeform,
 }
 
-/// Scavenge tool calls from reasoning_content that the model forgot to
+/// Scavenge tool calls from `reasoning_content` that the model forgot to
 /// put in the declared `tool_calls` field.
 ///
 /// Supports three patterns:
@@ -46,10 +46,7 @@ pub enum ScavengeSource {
 /// 2. OpenAI-style: `{"type": "function", "function": {"name": "search", "arguments": "..."}}`
 /// 3. R1 free-form: `{"tool_name": "web_search", "tool_args": {"query": "hello"}}`
 #[must_use]
-pub fn scavenge_tool_calls(
-    reasoning_content: &str,
-    allowed_names: &[&str],
-) -> Vec<ScavengedCall> {
+pub fn scavenge_tool_calls(reasoning_content: &str, allowed_names: &[&str]) -> Vec<ScavengedCall> {
     if reasoning_content.is_empty() {
         return Vec::new();
     }
@@ -90,8 +87,7 @@ fn find_matching_brace(text: &str, start: usize) -> Option<usize> {
     let mut depth = 1u32;
     let mut in_string = false;
     let mut escaped = false;
-    for i in (start + 1)..bytes.len() {
-        let c = bytes[i];
+    for (i, c) in bytes.iter().copied().enumerate().skip(start + 1) {
         if escaped {
             escaped = false;
             continue;
@@ -145,13 +141,13 @@ fn try_parse_call(
         if let Some(func) = obj.get("function").and_then(|v| v.as_object()) {
             if let Some(Value::String(name)) = func.get("name") {
                 if allowed.contains(name.as_str()) {
-                    let args = func
-                        .get("arguments")
-                        .map(|v| match v {
+                    let args = func.get("arguments").map_or_else(
+                        || "{}".to_string(),
+                        |v| match v {
                             Value::String(s) => s.clone(),
                             other => other.to_string(),
-                        })
-                        .unwrap_or_else(|| "{}".to_string());
+                        },
+                    );
                     return Some(ScavengedCall {
                         name: name.clone(),
                         arguments: args,
@@ -167,8 +163,7 @@ fn try_parse_call(
         if allowed.contains(name.as_str()) {
             let args = obj
                 .get("tool_args")
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "{}".to_string());
+                .map_or_else(|| "{}".to_string(), std::string::ToString::to_string);
             return Some(ScavengedCall {
                 name: name.clone(),
                 arguments: args,
@@ -193,7 +188,7 @@ pub struct FlattenDecision {
 }
 
 /// Analyze a JSON schema and decide if it needs flattening.
-/// DeepSeek drops arguments when a schema has >10 leaf params or depth >2.
+/// `DeepSeek` drops arguments when a schema has >10 leaf params or depth >2.
 #[must_use]
 pub fn analyze_schema(schema: &Value) -> FlattenDecision {
     let mut leaf_count = 0usize;
@@ -261,11 +256,7 @@ fn collect_flat(
             let req_set: std::collections::BTreeSet<&str> = schema
                 .get("required")
                 .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str())
-                        .collect()
-                })
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
 
             for (key, child) in props {
@@ -291,9 +282,8 @@ fn collect_flat(
 /// `{"user.address.city": "NYC"}` → `{"user": {"address": {"city": "NYC"}}}`
 #[must_use]
 pub fn nest_arguments(flat_args: &Value) -> Value {
-    let obj = match flat_args.as_object() {
-        Some(o) => o,
-        None => return flat_args.clone(),
+    let Some(obj) = flat_args.as_object() else {
+        return flat_args.clone();
     };
 
     let mut result = serde_json::Map::new();
@@ -584,24 +574,22 @@ fn close_braces(s: &str) -> Option<String> {
         open_braces -= 1;
     }
 
-    if result != s {
-        Some(result)
-    } else {
+    if result == s {
         None
+    } else {
+        Some(result)
     }
 }
 
 fn remove_trailing_comma_then_close(s: &str) -> Option<String> {
     let trimmed = s.trim_end();
     // Handle `...,}` — remove the trailing comma before the closing brace
-    let clean = if trimmed.ends_with(",}") {
-        let without = trimmed[..trimmed.len() - 2].to_string() + "}";
-        without
-    } else if trimmed.ends_with(",]") {
-        let without = trimmed[..trimmed.len() - 2].to_string() + "]";
-        without
-    } else if trimmed.ends_with(',') {
-        trimmed[..trimmed.len() - 1].to_string()
+    let clean = if let Some(stripped) = trimmed.strip_suffix(",}") {
+        stripped.to_string() + "}"
+    } else if let Some(stripped) = trimmed.strip_suffix(",]") {
+        stripped.to_string() + "]"
+    } else if let Some(stripped) = trimmed.strip_suffix(',') {
+        stripped.to_string()
     } else {
         return None;
     };
@@ -612,6 +600,7 @@ fn remove_trailing_comma_then_close(s: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     // ====================================================================
     // Scavenge tests
@@ -680,9 +669,10 @@ mod tests {
         let mut content = String::new();
         for i in 0..12 {
             // Each is a compact JSON object: {"name":"read_file","arguments":"{\"path\":\"/i\"}"}
-            content.push_str(&format!(
+            let _ = write!(
+                content,
                 r#"{{"name":"read_file","arguments":"{{\"path\":\"/{i}\"}}}}"#
-            ));
+            );
         }
         let calls = scavenge_tool_calls(&content, &["read_file"]);
         assert!(
@@ -780,9 +770,21 @@ mod tests {
     #[test]
     fn storm_passes_unique_calls() {
         let mut breaker = StormBreaker::new(6, 3);
-        assert!(!breaker.inspect("read_file", r#"{"path":"/a"}"#, false).suppress);
-        assert!(!breaker.inspect("read_file", r#"{"path":"/b"}"#, false).suppress);
-        assert!(!breaker.inspect("read_file", r#"{"path":"/c"}"#, false).suppress);
+        assert!(
+            !breaker
+                .inspect("read_file", r#"{"path":"/a"}"#, false)
+                .suppress
+        );
+        assert!(
+            !breaker
+                .inspect("read_file", r#"{"path":"/b"}"#, false)
+                .suppress
+        );
+        assert!(
+            !breaker
+                .inspect("read_file", r#"{"path":"/c"}"#, false)
+                .suppress
+        );
     }
 
     #[test]
@@ -837,7 +839,7 @@ mod tests {
         let result = repair_truncated_json(r#"{"path":"/foo","pattern":"bar""#);
         assert!(result.changed);
         assert!(!result.fallback);
-        assert!(result.repaired.contains("}"));
+        assert!(result.repaired.contains('}'));
         assert!(is_valid_json(&result.repaired));
     }
 

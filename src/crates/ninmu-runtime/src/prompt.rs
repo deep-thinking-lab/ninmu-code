@@ -555,7 +555,7 @@ fn get_simple_doing_tasks_section() -> String {
 
 /// DeepSeek-specific behavioral corrections.
 ///
-/// These rules address known DeepSeek failure modes in coding-agent
+/// These rules address known `DeepSeek` failure modes in coding-agent
 /// scenarios. They are always included because they improve output
 /// quality regardless of the backend model.
 fn get_deepseek_corrections_section() -> String {
@@ -722,12 +722,30 @@ mod tests {
                 ..ProjectContext::default()
             })
             .render();
-        assert!(prompt.contains("Behavioral guidelines"), "should contain section header");
-        assert!(prompt.contains("Every factual claim about this codebase"), "should contain evidence rule");
-        assert!(prompt.contains("Do not fabricate percentages"), "should contain no fabricated metrics");
-        assert!(prompt.contains("Reading a type annotation"), "should contain flag → consumer trace");
-        assert!(prompt.contains("Do not unilaterally simplify"), "should contain task integrity");
-        assert!(prompt.contains("Every tool's description ships"), "should contain schema cost");
+        assert!(
+            prompt.contains("Behavioral guidelines"),
+            "should contain section header"
+        );
+        assert!(
+            prompt.contains("Every factual claim about this codebase"),
+            "should contain evidence rule"
+        );
+        assert!(
+            prompt.contains("Do not fabricate percentages"),
+            "should contain no fabricated metrics"
+        );
+        assert!(
+            prompt.contains("Reading a type annotation"),
+            "should contain flag → consumer trace"
+        );
+        assert!(
+            prompt.contains("Do not unilaterally simplify"),
+            "should contain task integrity"
+        );
+        assert!(
+            prompt.contains("Every tool's description ships"),
+            "should contain schema cost"
+        );
     }
 
     #[test]

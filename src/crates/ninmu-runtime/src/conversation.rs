@@ -4,9 +4,7 @@ use std::fmt::{Display, Formatter};
 use ninmu_telemetry::SessionTracer;
 use serde_json::{Map, Value};
 
-use crate::cache_stable::{
-    compact_cache_stable, CacheStableCompactionConfig, CacheStableState,
-};
+use crate::cache_stable::{compact_cache_stable, CacheStableCompactionConfig, CacheStableState};
 use crate::compact::{
     compact_session, estimate_session_tokens, CompactionConfig, CompactionResult,
 };
@@ -126,7 +124,7 @@ pub struct TurnSummary {
     /// When true, the model emitted `<<<NEEDS_PRO>>>` indicating this turn
     /// should be retried on a more capable model (e.g. v4-pro).
     pub needs_pro: bool,
-    /// The escalated model name if needs_pro was detected.
+    /// The escalated model name if `needs_pro` was detected.
     pub escalated_model: Option<String>,
 }
 
@@ -150,7 +148,7 @@ pub struct ConversationRuntime<C, T> {
     hook_abort_signal: HookAbortSignal,
     hook_progress_reporter: Option<Box<dyn HookProgressReporter>>,
     session_tracer: Option<SessionTracer>,
-    /// When enabled, compaction preserves the immutable prefix for DeepSeek
+    /// When enabled, compaction preserves the immutable prefix for `DeepSeek`
     /// prefix-cache stability (append-only log, no message-list replacement).
     cache_stable: bool,
     /// When enabled, the model can signal it needs a more capable model
@@ -247,7 +245,7 @@ where
         self
     }
 
-    /// Enable DeepSeek prefix-cache stability mode.
+    /// Enable `DeepSeek` prefix-cache stability mode.
     /// When enabled, compaction preserves the immutable prefix by appending
     /// summaries instead of replacing the message list.
     #[must_use]
@@ -271,7 +269,7 @@ where
         self.cache_stable
     }
 
-    /// Returns `true` when NEEDS_PRO escalation is enabled.
+    /// Returns `true` when `NEEDS_PRO` escalation is enabled.
     #[must_use]
     pub fn needs_pro_escalation_enabled(&self) -> bool {
         self.needs_pro_escalation
@@ -578,7 +576,7 @@ where
             && assistant_messages
                 .iter()
                 .flat_map(|m| m.blocks.iter())
-                .any(|block| detect_needs_pro(block));
+                .any(detect_needs_pro);
 
         let escalated_model = if needs_pro {
             Some(self.escalation_model())
@@ -931,12 +929,10 @@ pub fn escalate_model_name(base_model: &Option<String>) -> String {
 #[must_use]
 pub fn detect_needs_pro(block: &ContentBlock) -> bool {
     match block {
-        ContentBlock::Text { text }
-        | ContentBlock::Thinking { thinking: text } => {
+        ContentBlock::Text { text } | ContentBlock::Thinking { thinking: text } => {
             text.trim().starts_with(NEEDS_PRO_MARKER)
         }
-        ContentBlock::ToolUse { .. } => false,
-        ContentBlock::ToolResult { .. } => false,
+        ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. } => false,
     }
 }
 

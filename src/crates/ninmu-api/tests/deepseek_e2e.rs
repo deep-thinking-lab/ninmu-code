@@ -1,37 +1,27 @@
-//! DeepSeek V4 e2e integration tests — wired against a local TCP server.
+//! `DeepSeek` V4 e2e integration tests — wired against a local TCP server.
 //!
-//! Tests the full HTTP protocol for DeepSeek V4 models, including:
+//! Tests the full HTTP protocol for `DeepSeek` V4 models, including:
 //! - `extra_body.thinking` in request payloads
 //! - `reasoning_content` in SSE streaming and non-streaming responses
 //! - Cache token fields (`prompt_cache_hit_tokens`, `prompt_cache_miss_tokens`)
 //! - V4 pricing integration via usage tracking
 //! - The `uncached_input_tokens()` fix (no double-counting cache hits in cost)
 
-use std::sync::{Arc, MutexGuard};
-use std::sync::{Mutex as StdMutex, OnceLock};
+use std::sync::Arc;
 
 use ninmu_api::{
     metadata_for_model, resolve_model_alias, ContentBlockDelta, ContentBlockDeltaEvent,
     ContentBlockStartEvent, ContentBlockStopEvent, InputContentBlock, InputMessage,
-    MessageDeltaEvent, MessageRequest, OpenAiCompatClient, OpenAiCompatConfig,
-    OutputContentBlock, ProviderClient, ProviderKind, StreamEvent, ToolChoice, ToolDefinition,
+    MessageDeltaEvent, MessageRequest, OpenAiCompatClient, OpenAiCompatConfig, OutputContentBlock,
+    ProviderClient, ProviderKind, StreamEvent, ToolChoice, ToolDefinition,
 };
-use ninmu_runtime::{
-    pricing_for_model, TokenUsage,
-};
+use ninmu_runtime::{pricing_for_model, TokenUsage};
 use serde_json::json;
 use tokio::sync::Mutex;
 
 mod common;
 
-use common::{http_response, spawn_server, CapturedRequest, EnvVarGuard};
-
-fn env_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| StdMutex::new(()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use common::{env_lock, http_response, spawn_server, CapturedRequest, EnvVarGuard};
 
 fn sample_deepseek_request(stream: bool) -> MessageRequest {
     MessageRequest {
@@ -272,8 +262,14 @@ async fn deepseek_stream_reasoning_content_emits_thinking_blocks() {
     ));
 
     // Final events
-    assert!(matches!(events[events.len() - 2], StreamEvent::MessageDelta(_)));
-    assert!(matches!(events[events.len() - 1], StreamEvent::MessageStop(_)));
+    assert!(matches!(
+        events[events.len() - 2],
+        StreamEvent::MessageDelta(_)
+    ));
+    assert!(matches!(
+        events[events.len() - 1],
+        StreamEvent::MessageStop(_)
+    ));
 }
 
 // ============================================================================
@@ -358,8 +354,7 @@ async fn deepseek_cache_tokens_parsed_from_streaming_response() {
     let mut usage = None;
     while let Some(event) = stream.next_event().await.expect("event should parse") {
         if let StreamEvent::MessageDelta(MessageDeltaEvent {
-            usage: event_usage,
-            ..
+            usage: event_usage, ..
         }) = event
         {
             usage = Some(event_usage);
@@ -419,12 +414,15 @@ async fn deepseek_reasoning_content_included_in_request_body() {
     let has_thinking = response.content.iter().any(|block| {
         matches!(block, OutputContentBlock::Thinking { thinking, .. } if thinking == "thinking step by step")
     });
-    assert!(has_thinking, "reasoning_content should be parsed as Thinking block");
+    assert!(
+        has_thinking,
+        "reasoning_content should be parsed as Thinking block"
+    );
 
     // Verify text is also preserved
-    let has_text = response.content.iter().any(|block| {
-        matches!(block, OutputContentBlock::Text { text } if text == "First response")
-    });
+    let has_text = response.content.iter().any(
+        |block| matches!(block, OutputContentBlock::Text { text } if text == "First response"),
+    );
     assert!(has_text, "content should be preserved as Text block");
 }
 
@@ -442,22 +440,33 @@ async fn deepseek_v4_flash_pricing_with_cache_hit_breakdown() {
         cache_read_input_tokens: 800_000,
     };
 
-    let pricing = pricing_for_model("deepseek-v4-flash")
-        .expect("should resolve v4 flash pricing");
+    let pricing = pricing_for_model("deepseek-v4-flash").expect("should resolve v4 flash pricing");
     let cost = usage.estimate_cost_usd_with_pricing(pricing);
 
     // miss: 200K * $0.14/M = $0.028
     // hit:  800K * $0.0028/M = $0.00224
     // out:  50K  * $0.28/M  = $0.014
     // total: $0.04424
-    assert!((cost.input_cost_usd - 0.028).abs() < 1e-9,
-        "miss cost: expected $0.028, got ${:.6}", cost.input_cost_usd);
-    assert!((cost.cache_read_cost_usd - 0.00224).abs() < 1e-9,
-        "hit cost: expected $0.00224, got ${:.6}", cost.cache_read_cost_usd);
-    assert!((cost.output_cost_usd - 0.014).abs() < 1e-9,
-        "output cost: expected $0.014, got ${:.6}", cost.output_cost_usd);
-    assert!((cost.total_cost_usd() - 0.04424).abs() < 1e-9,
-        "total cost: expected $0.04424, got ${:.6}", cost.total_cost_usd());
+    assert!(
+        (cost.input_cost_usd - 0.028).abs() < 1e-9,
+        "miss cost: expected $0.028, got ${:.6}",
+        cost.input_cost_usd
+    );
+    assert!(
+        (cost.cache_read_cost_usd - 0.00224).abs() < 1e-9,
+        "hit cost: expected $0.00224, got ${:.6}",
+        cost.cache_read_cost_usd
+    );
+    assert!(
+        (cost.output_cost_usd - 0.014).abs() < 1e-9,
+        "output cost: expected $0.014, got ${:.6}",
+        cost.output_cost_usd
+    );
+    assert!(
+        (cost.total_cost_usd() - 0.04424).abs() < 1e-9,
+        "total cost: expected $0.04424, got ${:.6}",
+        cost.total_cost_usd()
+    );
 }
 
 #[tokio::test]
@@ -502,8 +511,8 @@ async fn deepseek_v4_provider_client_routes_correctly() {
         "v4 flash should route to DeepSeek provider"
     );
 
-    let client_pro = ProviderClient::from_model("deepseek-v4-pro")
-        .expect("deepseek-v4-pro should construct");
+    let client_pro =
+        ProviderClient::from_model("deepseek-v4-pro").expect("deepseek-v4-pro should construct");
     assert_eq!(
         client_pro.provider_kind(),
         ninmu_api::ProviderKind::DeepSeek,
@@ -521,19 +530,20 @@ async fn deepseek_v4_provider_client_routes_correctly() {
 
 #[tokio::test]
 async fn deepseek_v4_model_resolves_from_registry() {
-
-
     // V4 models should have metadata in the model registry
-    let flash_meta = metadata_for_model("deepseek-v4-flash")
-        .expect("deepseek-v4-flash should have metadata");
+    let flash_meta =
+        metadata_for_model("deepseek-v4-flash").expect("deepseek-v4-flash should have metadata");
     assert_eq!(flash_meta.provider, ProviderKind::DeepSeek);
 
-    let pro_meta = metadata_for_model("deepseek-v4-pro")
-        .expect("deepseek-v4-pro should have metadata");
+    let pro_meta =
+        metadata_for_model("deepseek-v4-pro").expect("deepseek-v4-pro should have metadata");
     assert_eq!(pro_meta.provider, ProviderKind::DeepSeek);
 
     // Alias should pass through directly
-    assert_eq!(resolve_model_alias("deepseek-v4-flash"), "deepseek-v4-flash");
+    assert_eq!(
+        resolve_model_alias("deepseek-v4-flash"),
+        "deepseek-v4-flash"
+    );
     assert_eq!(resolve_model_alias("deepseek-v4-pro"), "deepseek-v4-pro");
 }
 
@@ -543,9 +553,7 @@ async fn deepseek_v4_model_resolves_from_registry() {
 
 #[tokio::test]
 async fn cache_stable_compaction_preserves_prefix() {
-    use ninmu_runtime::{
-        compact_cache_stable, CacheStableCompactionConfig, CacheStableState,
-    };
+    use ninmu_runtime::{compact_cache_stable, CacheStableCompactionConfig, CacheStableState};
     use ninmu_runtime::{ContentBlock, ConversationMessage, MessageRole, Session};
 
     let mut session = Session::new();
@@ -559,10 +567,14 @@ async fn cache_stable_compaction_preserves_prefix() {
     });
     // Non-prefix messages
     for i in 0..6 {
-        session.messages.push(ConversationMessage::user_text(format!("question {i}")));
-        session.messages.push(ConversationMessage::assistant(vec![
-            ContentBlock::Text { text: format!("answer {i}") },
-        ]));
+        session
+            .messages
+            .push(ConversationMessage::user_text(format!("question {i}")));
+        session
+            .messages
+            .push(ConversationMessage::assistant(vec![ContentBlock::Text {
+                text: format!("answer {i}"),
+            }]));
     }
 
     let cache_state = CacheStableState::from_session(&session);
@@ -583,8 +595,7 @@ async fn cache_stable_compaction_preserves_prefix() {
 
     // Verify prefix is unchanged (first message should be the original system prompt)
     assert_eq!(
-        result.session.messages[0],
-        session.messages[0],
+        result.session.messages[0], session.messages[0],
         "prefix must be preserved byte-for-byte"
     );
 
@@ -668,7 +679,8 @@ async fn deepseek_parses_structured_error_body() {
             "type": "authentication_error",
             "code": 401
         }
-    }).to_string();
+    })
+    .to_string();
 
     let server = spawn_server(
         state.clone(),
@@ -684,9 +696,7 @@ async fn deepseek_parses_structured_error_body() {
     let client = OpenAiCompatClient::new("bad-key", OpenAiCompatConfig::deepseek())
         .with_base_url(server.base_url());
 
-    let result = client
-        .send_message(&sample_deepseek_request(false))
-        .await;
+    let result = client.send_message(&sample_deepseek_request(false)).await;
 
     assert!(result.is_err(), "should fail on 401");
     let err = result.unwrap_err();
@@ -712,10 +722,7 @@ async fn needs_pro_escalation_model_inference() {
         escalate_model_name(&Some("deepseek-chat".to_string())),
         "deepseek-reasoner"
     );
-    assert_eq!(
-        escalate_model_name(&None),
-        "deepseek-v4-pro"
-    );
+    assert_eq!(escalate_model_name(&None), "deepseek-v4-pro");
     assert_eq!(
         escalate_model_name(&Some("unknown-model".to_string())),
         "deepseek-v4-pro"

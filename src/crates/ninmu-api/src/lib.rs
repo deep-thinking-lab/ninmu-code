@@ -4,7 +4,7 @@ mod error;
 mod http_client;
 mod prompt_cache;
 mod providers;
-mod repair;
+pub mod repair;
 mod sse;
 mod types;
 
